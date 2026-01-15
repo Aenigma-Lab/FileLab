@@ -94,11 +94,19 @@ install_system_packages() {
     if command -v apt-get &> /dev/null; then
         print_info "Detected Ubuntu/Debian system, installing packages..."
 
-        # Update package list
-        sudo apt-get update
+        # Update package list quietly
+        sudo apt-get update -qq
 
-        # Install Tesseract OCR with all languages and additional fonts
-        sudo apt-get install -y tesseract-ocr-all ttf-mscorefonts-installer fonts-crosextra-carlito fonts-crosextra-caladea
+        # Install Tesseract OCR with all language packs
+        print_info "Installing Tesseract OCR with all language packs..."
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y tesseract-ocr-all
+
+        # Install Microsoft fonts and additional fonts separately
+        print_info "Installing fonts..."
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            ttf-mscorefonts-installer \
+            fonts-crosextra-carlito \
+            fonts-crosextra-caladea
 
         print_status "System packages installed successfully"
     else

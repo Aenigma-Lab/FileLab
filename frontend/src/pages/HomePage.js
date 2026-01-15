@@ -5371,7 +5371,7 @@ xhr.addEventListener("load", () => {
       {/* Footer */}
       <footer className="mt-16 py-8 border-t bg-white/70 backdrop-blur-md">
         <div className="container mx-auto px-4 text-center text-gray-600">
-          <p className="text-sm">Powered by Precihole Sports Pvt Ltd</p>
+          <p className="text-sm">FileLab</p>
         </div>
       </footer>
     </div>
