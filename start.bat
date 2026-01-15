@@ -28,23 +28,8 @@ set "TESSERACT_URL=https://github.com/UB-Mannheim/tesseract/wiki"
 set "TESSERACT_URL_X86=https://github.com/UB-Mannheim/tesseract/releases/download/v5.3.3.20230701/tesseract-5.3.3.exe"
 set "TESSERACT_URL_X64=https://github.com/UB-Mannheim/tesseract/releases/download/v5.3.3.20230701/tesseract-5.3.3.20230701.exe"
 
-REM Color codes for Windows (limited support)
-set "GREEN=[92m"
-set "YELLOW=[93m"
-set "RED=[91m"
-set "BLUE=[94m"
-set "NC=[0m"
-
-REM Print colored message (works in modern terminals)
-echo_color() {
-    for /f "tokens=1,*" %%a in ("%*") do (
-        set "color_code=%%a"
-        set "message=%%b"
-    )
-    echo %color_code%%message%[0m
-}
-
-REM Alternative simple echo without colors for compatibility
+REM Note: ANSI color codes are not fully supported in Windows cmd.exe
+REM Using simple text prefixes instead for cross-platform compatibility
 echo_status() {
     echo [DEPLOY] %*
 }
