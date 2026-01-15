@@ -1,0 +1,27 @@
+Collecting xlsx2pdf
+  Downloading xlsx2pdf-1.0.4-py3-none-any.whl.metadata (460 bytes)
+Collecting reportlab<4,>=3 (from xlsx2pdf)
+  Downloading reportlab-3.6.13.tar.gz (4.0 MB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 4.0/4.0 MB 8.5 MB/s eta 0:00:00
+  Installing build dependencies: started
+  Installing build dependencies: finished with status 'done'
+  Getting requirements to build wheel: started
+  Getting requirements to build wheel: finished with status 'done'
+  Preparing metadata (pyproject.toml): started
+  Preparing metadata (pyproject.toml): finished with status 'done'
+Requirement already satisfied: openpyxl<4,>=3 in ./venv/lib/python3.12/site-packages (from xlsx2pdf) (3.1.5)
+Requirement already satisfied: et-xmlfile in ./venv/lib/python3.12/site-packages (from openpyxl<4,>=3->xlsx2pdf) (2.0.0)
+Requirement already satisfied: pillow>=9.0.0 in ./venv/lib/python3.12/site-packages (from reportlab<4,>=3->xlsx2pdf) (12.0.0)
+Downloading xlsx2pdf-1.0.4-py3-none-any.whl (4.0 kB)
+Building wheels for collected packages: reportlab
+  Building wheel for reportlab (pyproject.toml): started
+  Building wheel for reportlab (pyproject.toml): finished with status 'done'
+  Created wheel for reportlab: filename=reportlab-3.6.13-cp312-cp312-linux_x86_64.whl size=2236922 sha256=9c3f47eb16e6c9980c1f4d5f8042e4c658d40ed34ad85d5f15723eea85f2ddda
+  Stored in directory: /home/alfa/.cache/pip/wheels/48/67/58/d54706b91458551310cfa11bd10777cb55438c6f33bf3a5292
+Successfully built reportlab
+Installing collected packages: reportlab, xlsx2pdf
+  Attempting uninstall: reportlab
+    Found existing installation: reportlab 4.4.4
+    Uninstalling reportlab-4.4.4:
+      Successfully uninstalled reportlab-4.4.4
+Successfully installed reportlab-3.6.13 xlsx2pdf-1.0.4

@@ -1,0 +1,189 @@
+# =============================================================================
+# FileLab .gitignore
+# =============================================================================
+
+# =============================================================================
+# IDE and Editors
+# =============================================================================
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.#*
+
+# =============================================================================
+# Environment and Configuration
+# =============================================================================
+.env
+.env.local
+.env.*.local
+.env.production
+.env.development
+.env.staging
+MONGODB_HOST_PORT=*
+*.local
+
+# Credentials and tokens
+*token.json*
+*credentials.json*
+*.pem
+*.key
+*.crt
+
+# =============================================================================
+# Dependencies
+# =============================================================================
+node_modules/
+.bower_components/
+vendor/
+
+# Python virtual environments
+venv/
+.venv/
+env/
+.ENV/
+ENV/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+
+# =============================================================================
+# Frontend/React Build Outputs
+# =============================================================================
+frontend/build/
+frontend/dist/
+frontend/.next/
+frontend/out/
+
+# Generate static site
+.next/
+out/
+
+# TypeScript
+*.tsbuildinfo
+
+# =============================================================================
+# Backend Build Outputs
+# =============================================================================
+backend/venv/
+backend/.env
+
+# =============================================================================
+# Logs and Debug Files
+# =============================================================================
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# MongoDB logs
+mongodb.log*
+
+# =============================================================================
+# Testing
+# =============================================================================
+coverage/
+.nyc_output/
+*.lcov
+
+# =============================================================================
+# OS Files
+# =============================================================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+*.DS_Store
+
+# Linux
+.directory
+
+# =============================================================================
+# Docker
+# =============================================================================
+.docker/
+
+# =============================================================================
+# Data and Temporary Files
+# =============================================================================
+data/db/
+data/db/*
+tmp/
+temp/
+*.tmp
+*.temp
+
+# Database files
+*.sqlite
+*.sqlite3
+*.db
+*.rdb
+WiredTiger*
+mongod.lock
+
+# Uploads and processing
+uploads/
+downloads/
+
+# =============================================================================
+# Large Media and Archives
+# =============================================================================
+*.zip
+*.tar.gz
+*.tar
+*.tgz
+*.7z
+*.rar
+*.pack
+*.dmg
+*.iso
+
+# =============================================================================
+# Misc
+# =============================================================================
+*.egg-info/
+.dist-info/
+*.manifest
+*.spec
+
+# Jupyter notebooks
+.ipynb_checkpoints/
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# Package-lock files (optional - some prefer to keep these)
+# package-lock.json
+# yarn.lock
+# pnpm-lock.yaml
+
+# =============================================================================
+# Project Specific
+# =============================================================================
+# Generated SSL certificates (if using custom certs)
+ssl/
+certs/
+
+# Frontend plugins
+frontend/plugins/*/node_modules/
+
+# Test reports
+test_reports/
+
+# OS-specific
+Thumbs.db
+

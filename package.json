@@ -1,0 +1,28 @@
+{
+  "name": "file-conversion-app",
+  "version": "1.0.0",
+  "description": "File Conversion Application with Frontend, Backend, and MongoDB",
+  "scripts": {
+    "start": "./start.sh",
+    "start:win": "start.bat",
+    "start:mongo": "mongod --dbpath ./data/db --bind_ip 127.0.0.1 --port 27017",
+    "start:backend": "cd backend && ./venv/bin/uvicorn server:app --host 127.0.0.1 --port 8000",
+    "start:frontend": "cd frontend && npm start",
+    "install:all": "npm install && cd backend && python3 -m venv venv && ./venv/bin/pip install -r requirements.txt && cd ../frontend && npm install",
+    "build:frontend": "cd frontend && npm run build",
+    "stop": "pkill -f 'mongod|uvicorn|npm start' 2>/dev/null || true"
+  },
+  "keywords": [
+    "file-conversion",
+    "mongodb",
+    "fastapi",
+    "react"
+  ],
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": ">=16.0.0",
+    "python": ">=3.8"
+  }
+}
+

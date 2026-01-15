@@ -1,0 +1,92 @@
+services:
+  mongodb:
+    image: mongodb/mongodb-community-server:6.0.16-ubuntu2204
+    container_name: filelab-mongodb
+    restart: unless-stopped
+    environment:
+      - MONGO_INITDB_DATABASE=filelab
+    # Flexible port configuration:
+    # - MONGODB_HOST_PORT: Host port to bind (default: 27017)
+    # - If 27017 is in use, the installation script will try 27018, then 27019
+    # - Container internal port is always 27017
+    ports:
+      - "${MONGODB_HOST_PORT:-27017}:27017"
+    volumes:
+      - mongodb_data:/data/db
+    networks:
+      - filelab-network
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    # Pre-start command to clean up stale containers
+    # This helps prevent "address already in use" errors
+    # Note: In case of port conflicts, the install.sh script will automatically
+    # try alternative ports (27017 → 27018 → 27019)
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: filelab-backend
+    restart: unless-stopped
+    environment:
+      - MONGO_URL=mongodb://mongodb:27017
+      - DB_NAME=filelab
+      - CORS_ORIGINS=*
+      - TEMP_DIR=/app/tmp
+    ports:
+      - "8000:8000"
+    volumes:
+      - backend_tmp:/app/tmp
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    networks:
+      - filelab-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        - NODE_OPTIONS=--max-old-space-size=8192
+    container_name: filelab-frontend
+    restart: unless-stopped
+    environment:
+      - REACT_APP_IN_DOCKER=true
+      - BROWSER=none
+      - CI=true
+      - SKIP_PREFLIGHT_CHECK=true
+      - PUBLIC_URL=/
+    ports:
+      - "3000:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - filelab-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  mongodb_data:
+    driver: local
+  backend_tmp:
+    driver: local
+
+networks:
+  filelab-network:
+    driver: bridge
+

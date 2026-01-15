@@ -1,0 +1,403 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap');
+
+/* Prevent the page from "jumping" when Radix UI hides the scrollbar */
+/* ... keep your existing code above ... */
+
+/* Disable Radix's automatic body-shaping which triggers ResizeObserver */
+html {
+  --removed-body-scroll-bar-size: 0px !important;
+}
+
+body[style] {
+  padding-right: 0px !important;
+  margin-right: 0px !important;
+}
+
+/* Force the TabsContent to have a stable height so it doesn't 
+   collapse/expand when the dropdown logic runs */
+[data-radix-collection-item] {
+  transform: none !important;
+}
+
+* {
+  font-family: 'Inter', sans-serif;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: 'Space Grotesk', sans-serif;
+}
+
+.App {
+  min-height: 100vh;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #888;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #555;
+}
+
+/* Smooth transitions */
+button, a, input, select {
+  transition: background-color 0.2s ease, border-color 0.2s ease, transform 0.1s ease;
+}
+
+button:active {
+  transform: scale(0.98);
+}
+
+/* Active/open state */
+.active {
+  box-shadow:
+    0 0 0 2px rgba(110, 231, 183, 0.25),
+    0 8px 22px rgba(0, 0, 0, 0.35);
+}
+
+/* ========================
+   CSS-Only Watermark Preview Styles
+   ======================== */
+
+/* Main preview container */
+.watermark-preview-container {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 20px;
+  background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+  border-radius: 12px;
+  border: 1px solid #e2e8f0;
+}
+
+.watermark-preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.watermark-preview-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #1e293b;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.watermark-preview-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* PDF Viewer Wrapper */
+.watermark-pdf-viewer {
+  position: relative;
+  width: 100%;
+  background: #64748b;
+  border-radius: 8px;
+  overflow: hidden;
+  min-height: 400px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 20px;
+}
+
+.watermark-pdf-wrapper {
+  position: relative;
+  width: 100%;
+  max-width: 612px; /* A4 width at 72dpi approx */
+  background: white;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+  border-radius: 4px;
+}
+
+.watermark-pdf-object {
+  width: 100%;
+  height: auto;
+  display: block;
+  border-radius: 4px;
+}
+
+/* Watermark Overlay Container */
+.watermark-overlay-container {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
+  overflow: hidden;
+  border-radius: 4px;
+}
+
+/* Single Watermark Position */
+.watermark-overlay {
+  position: absolute;
+  pointer-events: none;
+}
+
+/* Center Position */
+.watermark-position-center {
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+
+/* Top Left Position */
+.watermark-position-top_left {
+  top: 40px;
+  left: 40px;
+}
+
+/* Top Right Position */
+.watermark-position-top_right {
+  top: 40px;
+  right: 40px;
+}
+
+/* Bottom Left Position */
+.watermark-position-bottom_left {
+  bottom: 40px;
+  left: 40px;
+}
+
+/* Bottom Right Position */
+.watermark-position-bottom_right {
+  bottom: 40px;
+  right: 40px;
+}
+
+/* Tiled Watermark Layout */
+.watermark-tiled-container {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: repeat(4, 1fr);
+  pointer-events: none;
+  overflow: hidden;
+  border-radius: 4px;
+}
+
+.watermark-tiled-item {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transform: rotate(-45deg);
+  pointer-events: none;
+}
+
+/* Text Watermark Styles */
+.watermark-text {
+  font-family: Helvetica, Arial, sans-serif;
+  font-weight: bold;
+  white-space: nowrap;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Text Outline Support */
+.watermark-text-with-outline {
+  -webkit-text-stroke: 1px var(--outline-color, #FFFFFF);
+  color: var(--text-color);
+  text-shadow: 
+    2px 2px 0 var(--outline-color, #FFFFFF),
+    -2px -2px 0 var(--outline-color, #FFFFFF),
+    2px -2px 0 var(--outline-color, #FFFFFF),
+    -2px 2px 0 var(--outline-color, #FFFFFF),
+    0 2px 0 var(--outline-color, #FFFFFF),
+    2px 0 0 var(--outline-color, #FFFFFF),
+    0 -2px 0 var(--outline-color, #FFFFFF),
+    -2px 0 0 var(--outline-color, #FFFFFF);
+}
+
+/* Image Watermark Styles */
+.watermark-image {
+  max-width: 200px;
+  max-height: 200px;
+  object-fit: contain;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Preview Empty State */
+.watermark-preview-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 300px;
+  background: #f1f5f9;
+  border: 2px dashed #cbd5e1;
+  border-radius: 8px;
+  color: #64748b;
+  text-align: center;
+  padding: 40px;
+}
+
+.watermark-preview-empty-icon {
+  width: 48px;
+  height: 48px;
+  margin-bottom: 16px;
+  opacity: 0.5;
+}
+
+.watermark-preview-empty-text {
+  font-size: 14px;
+  color: #64748b;
+}
+
+/* Preview Controls */
+.watermark-preview-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: white;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+}
+
+.watermark-preview-controls-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: #475569;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  .watermark-preview-container {
+    padding: 12px;
+  }
+  
+  .watermark-pdf-viewer {
+    min-height: 300px;
+    padding: 12px;
+  }
+  
+  .watermark-pdf-wrapper {
+    max-width: 100%;
+  }
+  
+  .watermark-tiled-container {
+    grid-template-columns: repeat(2, 1fr);
+    grid-template-rows: repeat(3, 1fr);
+  }
+  
+  /* Adjust positions for mobile */
+  .watermark-position-top_left {
+    top: 20px;
+    left: 20px;
+  }
+  
+  .watermark-position-top_right {
+    top: 20px;
+    right: 20px;
+  }
+  
+  .watermark-position-bottom_left {
+    bottom: 20px;
+    left: 20px;
+  }
+  
+  .watermark-position-bottom_right {
+    bottom: 20px;
+    right: 20px;
+  }
+  
+  .watermark-image {
+    max-width: 120px;
+    max-height: 120px;
+  }
+}
+
+@media (max-width: 480px) {
+  .watermark-tiled-container {
+    grid-template-columns: repeat(2, 1fr);
+    grid-template-rows: repeat(4, 1fr);
+  }
+  
+  .watermark-preview-header {
+    flex-direction: column;
+    gap: 12px;
+    align-items: flex-start;
+  }
+}
+
+/* Animation for smooth transitions */
+.watermark-text,
+.watermark-image {
+  transition: all 0.2s ease-out;
+}
+
+/* Loading state for PDF */
+.watermark-pdf-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 300px;
+  background: #f1f5f9;
+  border-radius: 8px;
+}
+
+.watermark-pdf-loading-spinner {
+  width: 40px;
+  height: 40px;
+  border: 3px solid #e2e8f0;
+  border-top-color: #3b82f6;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Grid layout for preview + settings */
+.watermark-preview-layout {
+  display: grid;
+  grid-template-columns: 1fr 360px;
+  gap: 24px;
+  align-items: start;
+}
+
+.watermark-preview-settings {
+  background: white;
+  border-radius: 12px;
+  padding: 20px;
+  border: 1px solid #e2e8f0;
+}
+
+@media (max-width: 1024px) {
+  .watermark-preview-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
