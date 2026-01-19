@@ -23,9 +23,17 @@ import {
   SearchCode,
   Search,
   FileImage,
+  Sparkles,
+  Zap,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+
+// AI Search utilities
+import { 
+  aiSearchOperations, 
+  OPERATION_KEYWORDS,
+} from "@/utils/aiSearch";
 
 // Define all operations with their data
 const ALL_OPERATIONS = [
@@ -123,6 +131,8 @@ export function MobileNavbar({
 }) {
   const location = useLocation();
   const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState([]);
+  const [isSearching, setIsSearching] = useState(false);
 
   // Map operation IDs to their handler functions
   const operationHandlers = useMemo(() => ({
@@ -166,15 +176,23 @@ export function MobileNavbar({
     watermark: watermarkPdf,
   }), [pdfToDocx, docxToPdf, docToDocx, docxToDoc, pdfToText, textToPdf, textToDocx, pdfToExcel, excelToPdf, pdfToPpt, pptxToPdf, imageToPdf, lockPdf, unlockPdf, mergePdf, splitPdf, convertImage, resizeImage, ocrImage, detectLanguage, zip, unZip, searchPdf, watermarkPdf, jpgToPng, jpgToWebp, jpgToBmp, pngToJpg, pngToWebp, pngToBmp, webpToJpg, webpToPng, webpToBmp, bmpToJpg, bmpToPng, bmpToWebp]);
 
-  // Filter operations based on search query
-  const filteredOperations = useMemo(() => {
-    if (!searchQuery.trim()) return null;
-    
-    const query = searchQuery.toLowerCase().trim();
-    return ALL_OPERATIONS.filter(op => 
-      op.label.toLowerCase().includes(query) ||
-      op.category.toLowerCase().includes(query)
-    );
+  // AI-powered search with fuzzy matching
+  useEffect(() => {
+    if (!searchQuery.trim()) {
+      setSearchResults([]);
+      setIsSearching(false);
+      return;
+    }
+
+    setIsSearching(true);
+    const timer = setTimeout(() => {
+      const searchResult = aiSearchOperations(searchQuery, ALL_OPERATIONS, 8);
+      // Extract results array from the returned object
+      setSearchResults(searchResult.results || []);
+      setIsSearching(false);
+    }, 150);
+
+    return () => clearTimeout(timer);
   }, [searchQuery]);
 
   /* ---------------------------------------
@@ -247,7 +265,7 @@ export function MobileNavbar({
           onClick={(e) => e.stopPropagation()}
         >
           {/* LEFT MENU HEADER */}
-          <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center justify-between mb-4">
             <span className="font-semibold text-gray-900">Menu</span>
             <button
               className="p-1 rounded hover:bg-gray-100"
@@ -260,16 +278,25 @@ export function MobileNavbar({
             </button>
           </div>
 
-          {/* SEARCH INPUT */}
-          <div className="mb-6">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+          {/* AI SEARCH INPUT */}
+          <div className="mb-4">
+            <div className="relative group">
+              {/* AI Badge */}
+              <div className="flex items-center gap-0.5 px-1.5 py-0.5 
+                bg-gradient-to-r from-blue-500/10 to-purple-600/10 border border-blue-200/50 
+                rounded-full text-[10px] font-medium text-blue-600 absolute -top-5 left-0 z-10">
+                <Sparkles className="w-3.5 h-3" />
+                AI
+              </div>
+              
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 group-focus-within:text-blue-500 transition-colors" />
               <Input
                 type="text"
-                placeholder="Search operations..."
+                placeholder="Search here.."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-10 pr-10"
+                className="pl-10 pr-10 bg-gray-50/50 group-focus-within:bg-white transition-all duration-300
+                  group-focus-within:ring-2 group-focus-within:ring-blue-500/20 group-focus-within:border-blue-500/30"
               />
               {searchQuery && (
                 <button
@@ -280,19 +307,62 @@ export function MobileNavbar({
                 </button>
               )}
             </div>
+            {/* Quick hint - Made more visible */}
+            {searchQuery ? (
+              <div className="mt-2 p-2 rounded-lg bg-amber-50 border border-amber-200 animate-fade-in">
+                <div className="flex items-center justify-center gap-2">
+                  <Zap className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" />
+                  <p className="text-xs font-medium text-amber-700">
+                    💡 Try: "merge pdf", "extract text", "lock pdf"
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <p className="text-xs text-gray-400 mt-1 text-center">
+                💡 Natural language search enabled
+              </p>
+            )}
           </div>
 
-          {/* SEARCH RESULTS MODE */}
+          {/* AI SEARCH RESULTS MODE */}
           {searchQuery.trim() ? (
-            <div className="mb-6">
-              {filteredOperations && filteredOperations.length > 0 ? (
+            <div className="mb-4">
+              {isSearching ? (
+                <div className="text-center py-8 text-gray-500">
+                  <div className="w-12 h-12 mx-auto mb-2 relative">
+                    <div className="absolute inset-0 border-4 border-blue-200 rounded-full"></div>
+                    <div className="absolute inset-0 border-4 border-blue-500 rounded-full border-t-transparent animate-spin"></div>
+                  </div>
+                  <p className="text-sm">AI is thinking...</p>
+                </div>
+              ) : searchResults.length > 0 ? (
                 <div className="flex flex-col gap-2">
-                  {filteredOperations.map((op) => (
+                  {/* Results header */}
+                  <div className="flex items-center justify-between px-2 mb-2">
+                    <span className="text-xs text-gray-500">
+                      {searchResults.length} result{searchResults.length !== 1 ? 's' : ''}
+                    </span>
+                    <div className="flex items-center gap-1 px-2 py-0.5 bg-gradient-to-r from-blue-500/10 to-purple-600/10 
+                      rounded-full text-xs font-medium text-blue-600">
+                      <Sparkles className="w-3 h-3" />
+                      AI
+                    </div>
+                  </div>
+                  
+                  {searchResults.map((result, index) => (
                     <MobileSearchResultButton
-                      key={op.id}
-                      operation={op}
+                      key={result.operation.id}
+                      operation={result.operation}
+                      // Convert percentage (0-100) to score (0-1) for UI
+                      score={result.percentage / 100}
+                      percentage={result.percentage}
+                      description={OPERATION_KEYWORDS[result.operation.id]?.description}
+                      confidence={result.confidence}
+                      matchType={result.matchType}
+                      // First result (highest percentage) is the best match
+                      isBestMatch={index === 0}
                       onClick={() => {
-                        const handler = operationHandlers[op.id];
+                        const handler = operationHandlers[result.operation.id];
                         if (handler) handleMenuAction(handler);
                       }}
                     />
@@ -301,7 +371,8 @@ export function MobileNavbar({
               ) : (
                 <div className="text-center py-8 text-gray-500">
                   <Search className="w-12 h-12 mx-auto mb-2 opacity-30" />
-                  <p>No operations found for "{searchQuery}"</p>
+                  <p className="text-sm mb-1">No operations found</p>
+                  <p className="text-xs text-gray-400">Try different keywords</p>
                 </div>
               )}
             </div>
@@ -327,7 +398,7 @@ export function MobileNavbar({
             <MenuButton onClick={() => handleMenuAction(excelToPdf)}>
               <FileSpreadsheet size={16} /> EXCEL TO PDF
             </MenuButton>
-            <MenuButton onClick={() => handleMenuAction(pdfToPptx)}>
+            <MenuButton onClick={() => handleMenuAction(pdfToPpt)}>
               <Presentation size={16} /> PDF TO POWERPOINT
             </MenuButton>
             <MenuButton onClick={() => handleMenuAction(pptxToPdf)}>
@@ -412,9 +483,9 @@ export function MobileNavbar({
 
               {/* OCR */}
               <MenuSection title="OCR OPERATIONS">
-                <MenuButton onClick={() => handleMenuAction(ocrImage)}>
-                  <Scan size={16} /> OCR IMAGE
-                </MenuButton>
+                <SmartMenuButton onClick={() => handleMenuAction(ocrImage)}>
+                  <Sparkles size={16} /> OCR IMAGE <span className="ml-1 px-1.5 py-0.5 bg-gradient-to-r from-purple-500 to-pink-500 text-white text-[8px] font-bold rounded-full">SMART</span>
+                </SmartMenuButton>
                 <MenuButton onClick={() => handleMenuAction(detectLanguage)}>
                   <FileSearch size={16} /> DETECT LANGUAGE
                 </MenuButton>
@@ -507,26 +578,157 @@ function MenuButton({ children, onClick }) {
   );
 }
 
-function MobileSearchResultButton({ operation, onClick }) {
-  const Icon = operation.icon;
+/* =====================================================
+   SMART MENU BUTTON - Enhanced for OCR
+===================================================== */
+function SmartMenuButton({ children, onClick }) {
+  const childrenArray = React.Children.toArray(children);
+  const icon = childrenArray[0];
+
   return (
     <button
       onClick={onClick}
-      className="group flex items-center gap-3 text-sm px-3 py-3 rounded-xl
+      className="group flex items-center gap-2 text-sm px-2 py-2.5 rounded-lg
+        transition-all duration-150 ease-out
+        hover:bg-gradient-to-r hover:from-purple-500 hover:to-pink-600
+        hover:shadow-md hover:scale-[1.02]
+        relative overflow-hidden border border-purple-200/50"
+    >
+      {/* Animated background */}
+      <div className="absolute inset-0 bg-gradient-to-r from-purple-500/10 via-pink-500/10 to-purple-500/10 
+        rounded-lg opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+      
+      {/* Glow effect */}
+      <div className="absolute -inset-0.5 bg-gradient-to-r from-purple-500 to-pink-500 rounded-lg blur opacity-0 group-hover:opacity-50 transition-opacity duration-300 -z-10" />
+      
+      {React.cloneElement(icon, {
+        className: `${icon.props.className || ''} text-purple-500 group-hover:text-white transition-all duration-150 ease-out transform group-hover:scale-110`.trim()
+      })}
+      <span className="bg-gradient-to-br from-purple-500 to-pink-600 bg-clip-text text-transparent group-hover:text-white transition-all duration-150 ease-out">
+        {childrenArray.slice(1).reduce((acc, curr) => {
+          if (typeof curr === 'string') acc += curr;
+          return acc;
+        }, '')}
+      </span>
+      {childrenArray.slice(2).map((child, idx) => (
+        <React.Fragment key={idx}>{child}</React.Fragment>
+      ))}
+    </button>
+  );
+}
+
+/* =====================================================
+   SEARCH RESULT BUTTON (MOBILE)
+   With percentage match and best match highlighting
+===================================================== */
+function MobileSearchResultButton({ 
+  operation, 
+  onClick, 
+  score, 
+  percentage, 
+  description, 
+  confidence,
+  matchType,
+  isBestMatch = false 
+}) {
+  const Icon = operation.icon;
+  
+  // Calculate relevance indicator color based on percentage
+  const getRelevanceColor = (pct) => {
+    if (pct >= 80) return "bg-green-500";
+    if (pct >= 60) return "bg-blue-500";
+    if (pct >= 40) return "bg-amber-500";
+    return "bg-gray-300";
+  };
+  
+  // Get percentage badge color based on confidence
+  const getPercentageBadgeColor = (pct) => {
+    if (pct >= 80) return "bg-green-100 text-green-700 border-green-200";
+    if (pct >= 60) return "bg-blue-100 text-blue-700 border-blue-200";
+    if (pct >= 40) return "bg-amber-100 text-amber-700 border-amber-200";
+    return "bg-gray-100 text-gray-700 border-gray-200";
+  };
+  
+  // Get confidence label
+  const getConfidenceLabel = (pct) => {
+    if (pct >= 80) return "High";
+    if (pct >= 60) return "Good";
+    if (pct >= 40) return "Fair";
+    return "Low";
+  };
+
+  return (
+    <button
+      onClick={onClick}
+      className={`
+        group flex items-center gap-2 text-xs px-2.5 py-2 rounded-xl
         transition-all duration-150 ease-out
         hover:bg-gradient-to-r hover:from-blue-500 hover:to-purple-600
         hover:shadow-lg hover:scale-[1.02]
-        w-full text-left"
+        w-full text-left relative
+        ${isBestMatch ? 'ring-2 ring-blue-500 ring-offset-1' : ''}
+      `}
     >
-      <Icon size={20} className="text-blue-500 group-hover:text-white transition-all duration-150 ease-out transform group-hover:scale-110" />
-      <div className="flex-1">
-        <span className="block font-medium bg-gradient-to-br from-blue-500 to-purple-600 bg-clip-text text-transparent group-hover:text-white transition-all duration-150 ease-out">
-          {operation.label}
-        </span>
-        <span className="text-xs text-gray-400 group-hover:text-white/80 transition-all duration-150 ease-out">
-          {operation.category}
+      {/* Hover background effect */}
+      <div className="absolute inset-0 bg-gradient-to-r from-blue-500/5 to-purple-600/5 
+        rounded-xl opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+      
+      {/* Relevance indicator */}
+      <div 
+        className={`absolute left-0 top-2 bottom-2 w-1 rounded-r-full transition-all duration-300 ${getRelevanceColor(percentage)}`}
+      />
+      
+      {/* Icon */}
+      <div className="relative p-1 rounded-lg bg-gradient-to-br from-blue-500/10 to-purple-600/10
+        group-hover:from-blue-500 group-hover:to-purple-600 transition-all duration-300 flex-shrink-0">
+        <Icon size={16} className="text-blue-500 group-hover:text-white transition-colors duration-300" />
+      </div>
+      
+      {/* Text content */}
+      <div className="flex-1 min-w-0 flex flex-col gap-0.5">
+        <div className="flex items-center gap-1 flex-wrap">
+          {/* Best Match Badge - Smaller */}
+          {isBestMatch && (
+            <span className="flex items-center gap-0.5 px-1.5 py-0.5 bg-gradient-to-r from-blue-500 to-purple-600 
+              text-white text-[8px] font-bold uppercase tracking-wider rounded-full flex-shrink-0">
+              ★ Best
+            </span>
+          )}
+          <span className="font-semibold text-gray-900 group-hover:text-white 
+            transition-all duration-300 flex-shrink-0 truncate">
+            {operation.label}
+          </span>
+        </div>
+        {description && (
+          <span className="text-[10px] text-gray-500 group-hover:text-white/80 
+            transition-all duration-300 truncate">
+            {description}
+          </span>
+        )}
+      </div>
+      
+      {/* Percentage Badge */}
+      <div className="flex flex-col items-end gap-0.5 flex-shrink-0">
+        <div className={`flex items-center px-1.5 py-0.5 rounded border text-[10px] font-bold ${getPercentageBadgeColor(percentage)}`}>
+          {percentage}%
+        </div>
+        <span className={`text-[8px] font-medium ${getPercentageBadgeColor(percentage)}`}>
+          {getConfidenceLabel(percentage)}
         </span>
       </div>
+      
+      {/* Arrow indicator */}
+      <div className="opacity-0 group-hover:opacity-100 transform translate-x-[-4px] group-hover:translate-x-0
+        transition-all duration-300 text-white/70 flex-shrink-0">
+        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+        </svg>
+      </div>
+      
+      {/* Border glow on hover */}
+      <div className="absolute inset-0 rounded-xl opacity-0 group-hover:opacity-100
+        bg-gradient-to-r from-blue-500 to-purple-600 blur-sm -z-10
+        transition-opacity duration-300" />
     </button>
   );
 }

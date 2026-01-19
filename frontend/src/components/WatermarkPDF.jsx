@@ -29,7 +29,7 @@ const formatFileSize = (bytes) => {
 const api = axios.create({
   // Use relative path for network compatibility - nginx proxies /api to backend
   baseURL: process.env.REACT_APP_BACKEND_URL ? `${process.env.REACT_APP_BACKEND_URL}/api` : "/api",
-  timeout: 60000, // 60 seconds timeout
+  timeout: 120000, // 120 seconds timeout for large PDFs
   headers: {
     'Content-Type': 'multipart/form-data'
   }
@@ -64,12 +64,12 @@ api.interceptors.response.use(
       
       // Handle specific error cases
       if (error.code === 'ECONNABORTED') {
-        return Promise.reject(new Error('Request timed out. The server may be busy. Please try again.'));
+        return Promise.reject(new Error('Request timed out. The PDF may be large. Please try a smaller file.'));
       }
       
       if (!error.response) {
         // Network error - server might not be running
-        return Promise.reject(new Error('Network error. Please check if the backend server is running.'));
+        return Promise.reject(new Error('Network error. Please check if the backend server is running. Make sure MongoDB is also running.'));
       }
       
       // For HTTP errors, pass through the original error with status info
@@ -79,11 +79,20 @@ api.interceptors.response.use(
       if (status === 400) {
         errorMessage = error.response?.data?.detail || 'Invalid request. Please check your input.';
       } else if (status === 413) {
-        errorMessage = 'File too large. Please upload a smaller file.';
+        errorMessage = 'File too large. Please upload a smaller file (max 30MB).';
       } else if (status === 415) {
         errorMessage = 'Unsupported file format. Please upload a valid PDF file.';
       } else if (status === 500) {
-        errorMessage = 'Server error. Please try again later.';
+        // Try to extract detailed error from response
+        if (error.response?.data?.detail) {
+          errorMessage = error.response.data.detail;
+        } else if (error.response?.data?.error) {
+          errorMessage = error.response.data.error;
+        } else {
+          errorMessage = 'Server error. The watermark service may be experiencing issues. Check the server logs for details.';
+        }
+      } else if (status === 503) {
+        errorMessage = 'Service temporarily unavailable. Please try again later.';
       }
       
       return Promise.reject(new Error(errorMessage));
@@ -370,6 +379,18 @@ const WatermarkPDF = () => {
     formData.append("outline_color", textWatermark.outlineColor);
 
     try {
+      console.log('[WATERMARK] Sending text watermark request...');
+      console.log('[WATERMARK] PDF file:', pdfFile.name, `(${formatFileSize(pdfFile.size)})`);
+      console.log('[WATERMARK] Watermark settings:', {
+        text: textWatermark.text,
+        font: textWatermark.fontName,
+        size: textWatermark.fontSize,
+        color: textWatermark.color,
+        opacity: textWatermark.opacity,
+        rotation: textWatermark.rotation,
+        position: textWatermark.position
+      });
+      
       const response = await api.post("/watermark/pdf/text", formData, {
         responseType: 'blob'
       });
@@ -381,6 +402,8 @@ const WatermarkPDF = () => {
         throw new Error("Empty response received from server");
       }
       
+      console.log('[WATERMARK] Text watermark applied successfully! Response size:', response.data.size);
+      
       setConvertedBlob(response.data);
       const originalName = pdfFile.name.replace('.pdf', '');
       setConvertedFilename(`${originalName}_watermarked.pdf`);
@@ -389,26 +412,40 @@ const WatermarkPDF = () => {
       setConversionProgress(100);
       toast.success("Text watermark applied successfully!");
     } catch (error) {
-      console.error("Error applying watermark:", error);
+      console.error("[WATERMARK] Error applying text watermark:", error);
       clearInterval(progressInterval);
       
       // Extract error message properly
-      let errorMessage = "Failed to apply watermark";
+      let errorMessage = "Failed to apply text watermark. Please try again.";
       
       if (error instanceof Error) {
         errorMessage = error.message;
-      } else if (error.response?.data?.detail) {
-        errorMessage = error.response.data.detail;
-      } else if (error.response?.data) {
-        // Try to extract from response data
-        const dataStr = JSON.stringify(error.response.data);
-        if (dataStr && dataStr.length < 500) {
-          errorMessage = dataStr;
+      }
+      
+      // Try to extract from response data (could be JSON error response)
+      if (error.response?.data) {
+        try {
+          // Try to parse as JSON first
+          const dataStr = await error.response.data.text();
+          if (dataStr) {
+            const jsonData = JSON.parse(dataStr);
+            if (jsonData.detail) {
+              errorMessage = jsonData.detail;
+            } else if (jsonData.error) {
+              errorMessage = jsonData.error;
+            }
+          }
+        } catch (parseError) {
+          // Not JSON, might be plain text
+          if (typeof error.response.data === 'string') {
+            errorMessage = error.response.data;
+          }
         }
       } else if (error.message) {
         errorMessage = error.message;
       }
       
+      console.error("[WATERMARK] Final error message:", errorMessage);
       toast.error(errorMessage);
       setSuccess(false);
       setConversionProgress(0);
@@ -463,6 +500,16 @@ const WatermarkPDF = () => {
     formData.append("margin_y", imageWatermark.marginY);
 
     try {
+      console.log('[WATERMARK] Sending image watermark request...');
+      console.log('[WATERMARK] PDF file:', pdfFile.name, `(${formatFileSize(pdfFile.size)})`);
+      console.log('[WATERMARK] Watermark image:', watermarkImage.name);
+      console.log('[WATERMARK] Image watermark settings:', {
+        opacity: imageWatermark.opacity,
+        scale: imageWatermark.scale,
+        rotation: imageWatermark.rotation,
+        position: imageWatermark.position
+      });
+      
       const response = await api.post("/watermark/pdf/image", formData, {
         responseType: 'blob'
       });
@@ -474,6 +521,8 @@ const WatermarkPDF = () => {
         throw new Error("Empty response received from server");
       }
       
+      console.log('[WATERMARK] Image watermark applied successfully! Response size:', response.data.size);
+      
       setConvertedBlob(response.data);
       const originalName = pdfFile.name.replace('.pdf', '');
       setConvertedFilename(`${originalName}_watermarked.pdf`);
@@ -482,26 +531,40 @@ const WatermarkPDF = () => {
       setConversionProgress(100);
       toast.success("Image watermark applied successfully!");
     } catch (error) {
-      console.error("Error applying image watermark:", error);
+      console.error("[WATERMARK] Error applying image watermark:", error);
       clearInterval(progressInterval);
       
       // Extract error message properly
-      let errorMessage = "Failed to apply image watermark";
+      let errorMessage = "Failed to apply image watermark. Please try again.";
       
       if (error instanceof Error) {
         errorMessage = error.message;
-      } else if (error.response?.data?.detail) {
-        errorMessage = error.response.data.detail;
-      } else if (error.response?.data) {
-        // Try to extract from response data
-        const dataStr = JSON.stringify(error.response.data);
-        if (dataStr && dataStr.length < 500) {
-          errorMessage = dataStr;
+      }
+      
+      // Try to extract from response data (could be JSON error response)
+      if (error.response?.data) {
+        try {
+          // Try to parse as JSON first
+          const dataStr = await error.response.data.text();
+          if (dataStr) {
+            const jsonData = JSON.parse(dataStr);
+            if (jsonData.detail) {
+              errorMessage = jsonData.detail;
+            } else if (jsonData.error) {
+              errorMessage = jsonData.error;
+            }
+          }
+        } catch (parseError) {
+          // Not JSON, might be plain text
+          if (typeof error.response.data === 'string') {
+            errorMessage = error.response.data;
+          }
         }
       } else if (error.message) {
         errorMessage = error.message;
       }
       
+      console.error("[WATERMARK] Final error message:", errorMessage);
       toast.error(errorMessage);
       setSuccess(false);
       setConversionProgress(0);

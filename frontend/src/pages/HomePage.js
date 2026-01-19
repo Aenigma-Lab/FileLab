@@ -2662,11 +2662,13 @@ xhr.addEventListener("load", () => {
           setConvertedBlob(blob);
           setConvertedFilename("individual_pdfs.zip");
           setShowDownloadButton(true);
+          setSuccess(true);
           toast.success(`Created ${selectedImages.length} individual PDF files!`);
         } else {
           setConvertedBlob(blob);
           setConvertedFilename(`${firstImageName}_and_others.pdf`);
           setShowDownloadButton(true);
+          setSuccess(true);
           toast.success("PDF created successfully!");
         }
         
@@ -2974,8 +2976,6 @@ xhr.addEventListener("load", () => {
           excelToPdf={openExcelToPdf}
           pdfToPpt={openPdfToPpt}
           pptxToPdf={openPptxToPdf}
-          docToDocx={openPdfToDocx}
-          docxToDoc={openPdfToDocx}
           detectLanguage={openDetectLanguage}
           watermarkPdf={openWatermarkPdf}
           jpgToPng={openJpgToPng}
@@ -2996,7 +2996,7 @@ xhr.addEventListener("load", () => {
           open={open}
           setOpen={setOpen}
           searchPdf={openSearchPdf}
-          pdfToDocx={convertDocument}
+          pdfToDocx={openPdfToDocx}
           docxToPdf={openDocxToPdf}
           pdfToText={openPdfToText}
           textToPdf={openTextToPdf}
@@ -3692,45 +3692,37 @@ xhr.addEventListener("load", () => {
                       </div>
                     </div>
 
-                    {/* Convert Button */}
+                    {/* Single Convert/Download Button */}
                     <ProgressButton
                       variant="purple"
                       loading={loading}
+                      success={success && showDownloadButton && convertedBlob}
                       progress={conversionProgress}
                       onClick={convertImagesToPdf}
                       disabled={loading || selectedImages.length === 0}
                       loadingText="Converting..."
                       successMessage="Complete!"
+                      downloadUrl={success && convertedBlob ? window.URL.createObjectURL(convertedBlob) : null}
+                      downloadFilename={convertedFilename}
+                      onDownloadComplete={() => {
+                        // Reset state after download
+                        clearAllImages();
+                        setSuccess(false);
+                        setShowDownloadButton(false);
+                        setConvertedBlob(null);
+                        setConvertedFilename("");
+                        setConversionProgress(0);
+                      }}
                     >
                       <FileText className="w-4 h-4 mr-2" />
-                      {pdfOutputMode === 'single' 
-                        ? `Convert ${selectedImages.length} Image${selectedImages.length !== 1 ? 's' : ''} to PDF`
-                        : `Convert ${selectedImages.length} Image${selectedImages.length !== 1 ? 's' : ''} to Individual PDFs`
+                      {success && showDownloadButton && convertedBlob
+                        ? (pdfOutputMode === 'individual' ? "Download ZIP" : "Download PDF")
+                        : (pdfOutputMode === 'single'
+                            ? `Convert ${selectedImages.length} Image${selectedImages.length !== 1 ? 's' : ''} to PDF`
+                            : `Convert ${selectedImages.length} Image${selectedImages.length !== 1 ? 's' : ''} to Individual PDFs`
+                        )
                       }
                     </ProgressButton>
-
-                    {/* Download Button */}
-                    {showDownloadButton && convertedBlob && (
-                      <div className="p-4 bg-green-50 rounded-lg">
-                        <p className="text-sm text-green-700 mb-2">
-                          {pdfOutputMode === 'individual' 
-                            ? `Created ${selectedImages.length} PDF files!`
-                            : "PDF created successfully!"
-                          }
-                        </p>
-                        <ProgressButton
-                          variant="success"
-                          loading={false}
-                          success={true}
-                          downloadUrl={window.URL.createObjectURL(convertedBlob)}
-                          downloadFilename={convertedFilename}
-                          onDownloadComplete={resetConversionState}
-                        >
-                          <Download className="w-4 h-4 mr-2" />
-                          {pdfOutputMode === 'individual' ? "Download ZIP" : "Download PDF"}
-                        </ProgressButton>
-                      </div>
-                    )}
                   </CardContent>
                 </Card>
               </TabsContent>
