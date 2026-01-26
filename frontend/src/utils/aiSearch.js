@@ -669,8 +669,8 @@ export function levenshteinDistance(str1, str2) {
  * @returns {string} - Confidence level (high/medium/low)
  */
 export function getConfidenceLevel(score) {
-  if (score >= 80) return CONFIDENCE_LEVEL.HIGH;
-  if (score >= 50) return CONFIDENCE_LEVEL.MEDIUM;
+  if (score >= 70) return CONFIDENCE_LEVEL.HIGH;
+  if (score >= 40) return CONFIDENCE_LEVEL.MEDIUM;
   return CONFIDENCE_LEVEL.LOW;
 }
 
@@ -693,13 +693,13 @@ export function detectMatchType(score, query, result, breakdown) {
     return MATCH_TYPE.EXACT;
   }
   
-  // Check for partial match (high score with some fuzzy matching)
+  // Check for exact match in label (high score)
   if (score >= 85 && breakdown.exactMatch) {
     return MATCH_TYPE.EXACT;
   }
   
   // Check for keyword match
-  if (breakdown.keywordDensity > 0.5) {
+  if (breakdown.keywordDensity > 0.4) {
     return MATCH_TYPE.KEYWORD;
   }
   
@@ -711,11 +711,20 @@ export function detectMatchType(score, query, result, breakdown) {
   }
   
   // Check for partial match (significant matching)
-  if (score >= 70 && breakdown.termCoverage >= 0.7) {
+  if (score >= 60 && breakdown.termCoverage >= 0.5) {
     return MATCH_TYPE.PARTIAL;
   }
   
-  // Default to fuzzy for lower confidence matches
+  // Check for fuzzy match (lower score but still a match)
+  if (score >= 40 && breakdown.termCoverage >= 0.3) {
+    return MATCH_TYPE.PARTIAL;
+  }
+  
+  // Default to fuzzy for any match above minimum threshold
+  if (score >= 25) {
+    return MATCH_TYPE.FUZZY;
+  }
+  
   return MATCH_TYPE.FUZZY;
 }
 
@@ -928,8 +937,8 @@ export function createFuseSearch(searchIndex) {
   const options = {
     includeScore: true,
     includeMatches: true,
-    threshold: 0.4, // Increased from 0.3 to be more fuzzy-friendly (0.0 = exact, 1.0 = match anything)
-    distance: 150, // Increased distance for better partial matching
+    threshold: 0.5, // Higher threshold for more fuzzy matching (0.0 = exact, 1.0 = match anything)
+    distance: 200, // Increased distance for better partial matching
     ignoreLocation: true, // Search anywhere in the string
     minMatchCharLength: 2, // Allow matching with 2+ characters
     keys: [
@@ -998,18 +1007,18 @@ export function calculateRelevanceScore(result, query) {
   const normalizedQuery = query.toLowerCase().trim();
   const queryTerms = normalizedQuery.split(/\s+/);
   
-  let score = 50; // Start with base score
+  let score = 30; // Start with lower base score for more fuzzy matches
   
   // Apply Fuse score (inverted, higher is better)
   if (result.score !== undefined) {
     const fuseScore = Math.max(0, 1 - result.score);
-    score = Math.round(fuseScore * 60); // Base weight from Fuse
+    score = Math.round(fuseScore * 50); // Base weight from Fuse
   }
   
-  // Boost exact matches in label (+20%)
+  // Boost exact matches in label (+15%)
   const labelMatch = result.item.label.toLowerCase();
   if (labelMatch.includes(normalizedQuery)) {
-    score += 20;
+    score += 15;
   }
   
   // Boost matches in search terms
@@ -1022,15 +1031,20 @@ export function calculateRelevanceScore(result, query) {
   });
   
   const termBoost = matchedTerms.length / Math.max(queryTerms.length, 1);
-  score += Math.round(termBoost * 30);
+  score += Math.round(termBoost * 35);
   
-  // Normalize to 0-100 range
-  score = Math.max(0, Math.min(100, score));
+  // Fuzzy match bonus for partial matches
+  if (result.score !== undefined && result.score < 0.5) {
+    score += 10; // Bonus for reasonably close fuzzy matches
+  }
+  
+  // Normalize to 0-100 range (allow lower scores to show)
+  score = Math.max(20, Math.min(100, score));
   
   // Calculate breakdown
   const breakdown = {
     baseScore: score >= 50 ? Math.round(score * 0.7) : score,
-    exactMatchBonus: labelMatch.includes(normalizedQuery) ? 20 : 0,
+    exactMatchBonus: labelMatch.includes(normalizedQuery) ? 15 : 0,
     keywordDensity: Math.round(termBoost * 100) / 100,
     categoryBoost: 0,
     lengthNormalization: Math.max(0.8, 1 - (normalizedQuery.length / 50)) * 10,
@@ -1531,7 +1545,7 @@ export function getConfidenceBadge(confidence) {
     high: {
       level: 'HIGH',
       color: 'text-green-600',
-      bgColor: 'bg-green-100',
+      bgColor: 'bg-transparent',
       borderColor: 'border-green-300',
       icon: '✓',
       description: 'Strong match',
@@ -1539,7 +1553,7 @@ export function getConfidenceBadge(confidence) {
     medium: {
       level: 'MEDIUM',
       color: 'text-blue-600',
-      bgColor: 'bg-blue-100',
+      bgColor: 'bg-transparent',
       borderColor: 'border-blue-300',
       icon: '~',
       description: 'Good match',
@@ -1547,7 +1561,7 @@ export function getConfidenceBadge(confidence) {
     low: {
       level: 'LOW',
       color: 'text-amber-600',
-      bgColor: 'bg-amber-100',
+      bgColor: 'bg-transparent',
       borderColor: 'border-amber-300',
       icon: '?',
       description: 'Partial match',

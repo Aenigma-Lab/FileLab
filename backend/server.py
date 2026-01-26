@@ -6,15 +6,17 @@ from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware as StarletteCORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
+import asyncio
 import logging
 from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict
-from typing import List, Optional
+from typing import Dict, List, Optional
 import uuid
 from datetime import datetime, timezone
 import io
 import zipfile
 import shutil
+from urllib.parse import quote
 from PIL import Image
 from pypdf import PdfReader, PdfWriter
 from pptx import Presentation
@@ -59,6 +61,23 @@ from services.table_extraction_service import (
     TableData,
     TableInfo,
     TableExtractionMethod
+)
+
+# Import smart OCR service for intelligent language detection
+from services.smart_ocr_service import (
+    smart_detect_language_from_image,
+    smart_ocr_image,
+    format_detection_result,
+    get_confidence_level
+)
+
+# Import QR Code generator service
+from services.qrcode_service import (
+    QRCodeGenerator,
+    QRType,
+    QRColor,
+    ErrorCorrection,
+    COLOR_THEMES
 )
 
 
@@ -357,21 +376,183 @@ LANGUAGE_NAMES = {
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-# MongoDB connection
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+# ============== MongoDB Configuration ==============
+# MongoDB connection settings with retry logic
+MONGO_URL = os.environ.get('MONGO_URL', 'mongodb://localhost:27017')
+MONGO_DB_NAME = os.environ.get('DB_NAME', 'filelab')
+
+# Connection timeout settings (in milliseconds)
+MONGO_CONNECT_TIMEOUT_MS = int(os.environ.get('MONGO_CONNECT_TIMEOUT_MS', '10000'))
+MONGO_SERVER_SELECTION_TIMEOUT_MS = int(os.environ.get('MONGO_SERVER_SELECTION_TIMEOUT_MS', '5000'))
+
+# Connection pool settings
+MONGO_MAX_POOL_SIZE = int(os.environ.get('MONGO_MAX_POOL_SIZE', '10'))
+MONGO_MIN_POOL_SIZE = int(os.environ.get('MONGO_MIN_POOL_SIZE', '1'))
+
+# Retry settings
+MONGO_RETRY_WRITES = os.environ.get('MONGO_RETRY_WRITES', 'true').lower() == 'true'
+MONGO_RETRY_READS = os.environ.get('MONGO_RETRY_READS', 'true').lower() == 'true'
+
+# MongoDB client instance (initialized in lifespan)
+mongo_client = None
+mongo_db = None
+
+
+async def init_mongodb(max_retries: int = 5, retry_delay: float = 2.0) -> bool:
+    """Initialize MongoDB connection with retry logic.
+    
+    Args:
+        max_retries: Maximum number of connection retries
+        retry_delay: Delay between retries in seconds
+    
+    Returns:
+        bool: True if connection successful, False otherwise
+    """
+    global mongo_client, mongo_db
+    
+    connection_string = MONGO_URL
+    # Remove any quotes from the connection string
+    connection_string = connection_string.strip().strip('"\'')
+    
+    print(f"Connecting to MongoDB: {connection_string}")
+    print(f"Database: {MONGO_DB_NAME}")
+    print(f"Connect timeout: {MONGO_CONNECT_TIMEOUT_MS}ms")
+    print(f"Server selection timeout: {MONGO_SERVER_SELECTION_TIMEOUT_MS}ms")
+    print(f"Max pool size: {MONGO_MAX_POOL_SIZE}")
+    print(f"Min pool size: {MONGO_MIN_POOL_SIZE}")
+    
+    for attempt in range(1, max_retries + 1):
+        try:
+            # Create MongoDB client with proper configuration
+            mongo_client = AsyncIOMotorClient(
+                connection_string,
+                connectTimeoutMS=MONGO_CONNECT_TIMEOUT_MS,
+                serverSelectionTimeoutMS=MONGO_SERVER_SELECTION_TIMEOUT_MS,
+                maxPoolSize=MONGO_MAX_POOL_SIZE,
+                minPoolSize=MONGO_MIN_POOL_SIZE,
+                retryWrites=MONGO_RETRY_WRITES,
+                retryReads=MONGO_RETRY_READS
+            )
+            
+            # Get database instance
+            mongo_db = mongo_client[MONGO_DB_NAME]
+            
+            # Test connection with ping
+            await mongo_client.admin.command('ping')
+            
+            print(f"✓ MongoDB connected successfully on attempt {attempt}")
+            print(f"  Database: {MONGO_DB_NAME}")
+            print(f"  Client: {mongo_client.address}")
+            return True
+            
+        except Exception as e:
+            print(f"✗ MongoDB connection attempt {attempt}/{max_retries} failed:")
+            print(f"  Error: {str(e)}")
+            
+            # Clean up failed connection attempt
+            if mongo_client:
+                try:
+                    mongo_client.close()
+                except:
+                    pass
+                mongo_client = None
+            
+            if attempt < max_retries:
+                print(f"  Retrying in {retry_delay} seconds...")
+                await asyncio.sleep(retry_delay)
+                # Increase delay for next retry (exponential backoff)
+                retry_delay = min(retry_delay * 1.5, 30.0)
+            else:
+                print("✗ All connection attempts failed")
+                return False
+
+
+async def close_mongodb():
+    """Close MongoDB connection gracefully."""
+    global mongo_client, mongo_db
+    
+    if mongo_client:
+        try:
+            print("Closing MongoDB connection...")
+            mongo_client.close()
+            print("✓ MongoDB connection closed")
+        except Exception as e:
+            print(f"Error closing MongoDB connection: {e}")
+        finally:
+            mongo_client = None
+            mongo_db = None
+
+
+def get_db():
+    """Get MongoDB database instance.
+    
+    Returns:
+        AsyncIOMotorDatabase: MongoDB database instance
+        
+    Raises:
+        RuntimeError: If MongoDB is not connected
+    """
+    global mongo_db
+    if mongo_db is None:
+        raise RuntimeError(
+            "MongoDB is not connected. Please ensure MongoDB is running and restart the application."
+        )
+    return mongo_db
+
+
+def get_collection(collection_name: str):
+    """Get MongoDB collection with proper error handling.
+    
+    Args:
+        collection_name: Name of the collection
+        
+    Returns:
+        AsyncIOMotorCollection: MongoDB collection
+        
+    Raises:
+        RuntimeError: If MongoDB is not connected
+    """
+    db = get_db()
+    return db[collection_name]
+
 
 # Define lifespan context manager for startup and shutdown events
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager for startup and shutdown events."""
+    global mongo_client, mongo_db
+    
     # Startup: app is starting
-    print("Starting up File Conversion API...")
+    print("=" * 60)
+    print("File Conversion API - Starting up...")
+    print("=" * 60)
+    
+    # Initialize MongoDB with retry logic
+    mongodb_connected = await init_mongodb(max_retries=5, retry_delay=2.0)
+    
+    if not mongodb_connected:
+        print("WARNING: MongoDB connection failed. The application will start but database features may not work.")
+        print("Please ensure MongoDB is running and restart the application.")
+        print("You can check MongoDB status with: docker compose logs mongodb")
+        print("Or for local MongoDB: sudo systemctl status mongod")
+    
+    print("=" * 60)
+    print("File Conversion API started successfully!")
+    print("=" * 60)
+    
     yield
+    
     # Shutdown: app is closing
+    print("=" * 60)
     print("Shutting down File Conversion API...")
-    client.close()
+    print("=" * 60)
+    
+    # Close MongoDB connection
+    await close_mongodb()
+    
+    print("=" * 60)
+    print("File Conversion API shutdown complete!")
+    print("=" * 60)
 
 # Create the main app with lifespan
 app = FastAPI(lifespan=lifespan)
@@ -408,12 +589,29 @@ class ConversionHistoryCreate(BaseModel):
 
 # Helper Functions
 def save_upload_file_tmp(upload_file: UploadFile) -> Path:
-    """Save uploaded file to temp directory"""
+    """Save uploaded file to temp directory with proper fsync to ensure file is fully written."""
     try:
         suffix = Path(upload_file.filename).suffix
         tmp_path = TEMP_DIR / f"{uuid.uuid4()}{suffix}"
+        
         with tmp_path.open("wb") as buffer:
+            # Copy file data to buffer
             shutil.copyfileobj(upload_file.file, buffer)
+            
+            # Ensure data is written to disk (flush and sync)
+            buffer.flush()
+            os.fsync(buffer.fileno())
+        
+        # Verify the file was created and has content
+        if not tmp_path.exists():
+            raise Exception(f"File was not created: {tmp_path}")
+        
+        file_size = tmp_path.stat().st_size
+        if file_size == 0:
+            raise Exception(f"File is empty after writing: {tmp_path}")
+        
+        print(f"[FILE] Saved uploaded file: {tmp_path} ({file_size} bytes)")
+        
         return tmp_path
     finally:
         upload_file.file.close()
@@ -721,6 +919,221 @@ def search_in_pdf(pdf_path: Path, search_term: str) -> dict:
         "search_term": search_term,
         "results": results
     }
+
+
+# ============== AI Search Functions ==============
+
+def ai_search_in_pdf(pdf_path: Path, search_term: str) -> dict:
+    """AI-powered semantic search for text in PDF using TF-IDF and cosine similarity.
+    
+    This function provides intelligent search that:
+    - Understands semantic meaning, not just exact matches
+    - Ranks results by relevance score
+    - Finds related terms and concepts
+    - Works with natural language queries
+    """
+    try:
+        from sklearn.feature_extraction.text import TfidfVectorizer
+        from sklearn.metrics.pairwise import cosine_similarity
+        import numpy as np
+        import re
+    except ImportError:
+        # Fallback to basic search if sklearn is not available
+        print("scikit-learn not available, using basic search")
+        return search_in_pdf(pdf_path, search_term)
+    
+    reader = PdfReader(str(pdf_path))
+    
+    # Extract text from all pages
+    all_text = ""
+    page_texts = []
+    for page in reader.pages:
+        text = page.extract_text() or ""
+        page_texts.append(text)
+        all_text += text + " "
+    
+    if not all_text.strip():
+        return {
+            "total_matches": 0,
+            "search_term": search_term,
+            "results": [],
+            "ai_mode": True,
+            "message": "No text content found in PDF"
+        }
+    
+    # Clean and preprocess text
+    def preprocess_text(text):
+        # Convert to lowercase
+        text = text.lower()
+        # Remove special characters but keep spaces
+        text = re.sub(r'[^\w\s]', ' ', text)
+        # Remove extra whitespace
+        text = ' '.join(text.split())
+        return text
+    
+    # Expand search terms with synonyms and related concepts
+    def expand_search_terms(query):
+        """Expand query with related terms for better semantic matching"""
+        query = query.lower().strip()
+        terms = [query]
+        
+        # Common expansions
+        expansions = {
+            'financial': ['money', 'revenue', 'income', 'cost', 'expense', 'profit', 'budget'],
+            'sales': ['revenue', 'income', 'business', 'transactions', 'deals'],
+            'report': ['summary', 'document', 'analysis', 'review', 'statement'],
+            'data': ['information', 'statistics', 'figures', 'numbers', 'metrics'],
+            'analysis': ['study', 'examination', 'review', 'evaluation', 'assessment'],
+            'table': ['data', 'chart', 'figure', 'grid', 'matrix'],
+            'section': ['part', 'chapter', 'division', 'portion'],
+            'conclusion': ['summary', 'ending', 'final', 'result', 'outcome'],
+            'introduction': ['overview', 'beginning', 'preface', 'background'],
+            'methodology': ['method', 'approach', 'procedure', 'technique'],
+            'results': ['findings', 'outcome', 'data', 'information'],
+            'discussion': ['analysis', 'interpretation', 'consideration'],
+        }
+        
+        # Add related terms
+        for key, related in expansions.items():
+            if key in query:
+                terms.extend(related)
+        
+        # Also add individual words from query
+        words = query.split()
+        if len(words) > 1:
+            terms.extend(words)
+        
+        return list(set(terms))
+    
+    # Expand the search query
+    expanded_terms = expand_search_terms(search_term)
+    
+    # Create chunks from the document for better matching
+    def create_chunks(text, chunk_size=500, overlap=50):
+        """Split text into overlapping chunks"""
+        words = text.split()
+        chunks = []
+        for i in range(0, len(words), chunk_size - overlap):
+            chunk = ' '.join(words[i:i + chunk_size])
+            if chunk:
+                chunks.append(chunk)
+        return chunks
+    
+    # Create chunks from the full text
+    document_chunks = create_chunks(all_text)
+    
+    if not document_chunks:
+        return {
+            "total_matches": 0,
+            "search_term": search_term,
+            "results": [],
+            "ai_mode": True
+        }
+    
+    # Preprocess chunks
+    processed_chunks = [preprocess_text(chunk) for chunk in document_chunks]
+    
+    # Create TF-IDF vectorizer
+    try:
+        vectorizer = TfidfVectorizer(
+            ngram_range=(1, 2),  # Use unigrams and bigrams
+            stop_words='english',
+            max_features=5000,
+            min_df=1,
+            max_df=0.95
+        )
+        
+        # Fit and transform the document chunks
+        tfidf_matrix = vectorizer.fit_transform(processed_chunks)
+        
+        # Transform the search query
+        query_processed = preprocess_text(search_term)
+        query_vector = vectorizer.transform([query_processed])
+        
+        # Calculate cosine similarity between query and all chunks
+        similarities = cosine_similarity(query_vector, tfidf_matrix).flatten()
+        
+        # Get top matches
+        top_indices = np.argsort(similarities)[::-1]
+        
+        # Find which page each chunk belongs to
+        def find_page_for_chunk(chunk_start, page_texts):
+            char_count = 0
+            for page_num, page_text in enumerate(page_texts):
+                page_len = len(page_text)
+                if chunk_start >= char_count and chunk_start < char_count + page_len:
+                    return page_num + 1
+                char_count += page_len
+            return 1
+        
+        # Build results with relevance scores
+        results = []
+        seen_pages = set()
+        min_score = 0.05  # Minimum relevance score threshold
+        
+        for idx in top_indices:
+            score = similarities[idx]
+            if score < min_score or len(results) >= 20:  # Limit to 20 results
+                break
+            
+            chunk = processed_chunks[idx]
+            original_chunk = document_chunks[idx]
+            
+            # Find the original text chunk
+            chunk_start = all_text.find(original_chunk)
+            
+            # Find which page this chunk is on
+            page_num = find_page_for_chunk(chunk_start, page_texts)
+            
+            # Find the search term in the original text
+            search_lower = search_term.lower()
+            original_lower = original_chunk.lower()
+            pos = original_lower.find(search_lower)
+            
+            if pos == -1:
+                # Try expanded terms
+                for term in expanded_terms:
+                    pos = original_lower.find(term.lower())
+                    if pos != -1:
+                        break
+            
+            if pos == -1:
+                pos = 0
+            
+            # Extract context around the match
+            context_start = max(0, pos - 150)
+            context_end = min(len(original_chunk), pos + len(search_term) + 150)
+            context = original_chunk[context_start:context_end]
+            
+            # Highlight search terms in context
+            highlighted = context
+            for term in expanded_terms:
+                pattern = re.compile(re.escape(term), re.IGNORECASE)
+                highlighted = pattern.sub(f"**{term.upper()}**", highlighted)
+            
+            # Only add if we haven't seen this page with a similar high score
+            if page_num not in seen_pages or score > 0.3:
+                results.append({
+                    "page": page_num,
+                    "context": "..." + highlighted + "...",
+                    "relevance_score": round(float(score) * 100, 1),  # Convert to percentage
+                    "position": chunk_start
+                })
+                seen_pages.add(page_num)
+        
+        return {
+            "total_matches": len(results),
+            "search_term": search_term,
+            "results": results,
+            "ai_mode": True,
+            "expanded_terms": expanded_terms,
+            "message": f"AI semantic search found {len(results)} relevant matches"
+        }
+        
+    except Exception as e:
+        print(f"AI search error: {e}")
+        # Fallback to basic search
+        return search_in_pdf(pdf_path, search_term)
 
 def detect_language_from_image(image_path: Path) -> dict:
     """Detect language/script from image using Tesseract OSD"""
@@ -2767,7 +3180,7 @@ async def docx_to_pdf(
         )
         doc = history.model_dump()
         doc["timestamp"] = doc["timestamp"].isoformat()
-        await db.conversion_history.insert_one(doc)
+        await get_db().conversion_history.insert_one(doc)
 
         return FileResponse(
             path=output_path,
@@ -2786,7 +3199,7 @@ async def docx_to_pdf(
         doc = history.model_dump()
         doc["timestamp"] = doc["timestamp"].isoformat()
         doc["error"] = str(e)
-        await db.conversion_history.insert_one(doc)
+        await get_db().conversion_history.insert_one(doc)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -2810,7 +3223,7 @@ async def docx_to_doc(
         )
         doc = history.model_dump()
         doc["timestamp"] = doc["timestamp"].isoformat()
-        await db.conversion_history.insert_one(doc)
+        await get_db().conversion_history.insert_one(doc)
 
         return FileResponse(
             path=output_path,
@@ -2829,7 +3242,7 @@ async def docx_to_doc(
         doc = history.model_dump()
         doc["timestamp"] = doc["timestamp"].isoformat()
         doc["error"] = str(e)
-        await db.conversion_history.insert_one(doc)
+        await get_db().conversion_history.insert_one(doc)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -2846,7 +3259,7 @@ async def docx_to_txt(
     
     return FileResponse(
         path=output_path,
-        filename="converted.txt",
+        filename=file.filename.replace(".docx", ".txt"),
         media_type="text/plain"
     )
 
@@ -2866,7 +3279,7 @@ async def doc_to_docx(
     
     return FileResponse(
         path=output_path,
-        filename="converted.docx",
+        filename=file.filename.replace(".doc", ".docx"),
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     )
 
@@ -2884,7 +3297,7 @@ async def doc_to_pdf(
     
     return FileResponse(
         path=output_path,
-        filename="converted.pdf",
+        filename=file.filename.replace(".doc", ".pdf"),
         media_type="application/pdf"
     )
 
@@ -2916,7 +3329,7 @@ async def pdf_to_docx(
         doc = history.model_dump()
         doc["timestamp"] = doc["timestamp"].isoformat()
 
-        await db.conversion_history.insert_one(doc)
+        await get_db().conversion_history.insert_one(doc)
 
         # 4️⃣ Return converted file
         return FileResponse(
@@ -2942,7 +3355,7 @@ async def pdf_to_docx(
         doc["timestamp"] = doc["timestamp"].isoformat()
         doc["error"] = str(e)
 
-        await db.conversion_history.insert_one(doc)
+        await get_db().conversion_history.insert_one(doc)
 
         raise HTTPException(
             status_code=500,
@@ -2970,7 +3383,7 @@ async def pdf_to_doc(
         )
         doc = history.model_dump()
         doc["timestamp"] = doc["timestamp"].isoformat()
-        await db.conversion_history.insert_one(doc)
+        await get_db().conversion_history.insert_one(doc)
 
         return FileResponse(
             path=output_path,
@@ -2989,7 +3402,7 @@ async def pdf_to_doc(
         doc = history.model_dump()
         doc["timestamp"] = doc["timestamp"].isoformat()
         doc["error"] = str(e)
-        await db.conversion_history.insert_one(doc)
+        await get_db().conversion_history.insert_one(doc)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -3038,7 +3451,7 @@ async def pdf_to_txt(
         )
         doc = history.model_dump()
         doc["timestamp"] = doc["timestamp"].isoformat()
-        await db.conversion_history.insert_one(doc)
+        await get_db().conversion_history.insert_one(doc)
 
         return FileResponse(
             path=output_path,
@@ -3061,7 +3474,7 @@ async def pdf_to_txt(
         doc["timestamp"] = doc["timestamp"].isoformat()
         doc["error"] = str(e)
         try:
-            await db.conversion_history.insert_one(doc)
+            await get_db().conversion_history.insert_one(doc)
         except:
             pass
         raise HTTPException(
@@ -3090,7 +3503,7 @@ async def pdf_to_xlsx(
         )
         doc = history.model_dump()
         doc["timestamp"] = doc["timestamp"].isoformat()
-        await db.conversion_history.insert_one(doc)
+        await get_db().conversion_history.insert_one(doc)
 
         return FileResponse(
             path=output_path,
@@ -3109,7 +3522,7 @@ async def pdf_to_xlsx(
         doc = history.model_dump()
         doc["timestamp"] = doc["timestamp"].isoformat()
         doc["error"] = str(e)
-        await db.conversion_history.insert_one(doc)
+        await get_db().conversion_history.insert_one(doc)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -3133,7 +3546,7 @@ async def pdf_to_pptx(
         )
         doc = history.model_dump()
         doc["timestamp"] = doc["timestamp"].isoformat()
-        await db.conversion_history.insert_one(doc)
+        await get_db().conversion_history.insert_one(doc)
 
         return FileResponse(
             path=output_path,
@@ -3152,7 +3565,7 @@ async def pdf_to_pptx(
         doc = history.model_dump()
         doc["timestamp"] = doc["timestamp"].isoformat()
         doc["error"] = str(e)
-        await db.conversion_history.insert_one(doc)
+        await get_db().conversion_history.insert_one(doc)
         raise HTTPException(status_code=500, detail=str(e))
     
 
@@ -3180,7 +3593,7 @@ async def text_to_pdf(
         )
         doc = history.model_dump()
         doc["timestamp"] = doc["timestamp"].isoformat()
-        await db.conversion_history.insert_one(doc)
+        await get_db().conversion_history.insert_one(doc)
 
         # 4️⃣ Return PDF
         return FileResponse(
@@ -3201,7 +3614,7 @@ async def text_to_pdf(
         doc = history.model_dump()
         doc["timestamp"] = doc["timestamp"].isoformat()
         doc["error"] = str(e)
-        await db.conversion_history.insert_one(doc)
+        await get_db().conversion_history.insert_one(doc)
 
         raise HTTPException(
             status_code=500,
@@ -3231,7 +3644,7 @@ async def xlsx_to_pdf(
         )
         doc = history.model_dump()
         doc["timestamp"] = doc["timestamp"].isoformat()
-        await db.conversion_history.insert_one(doc)
+        await get_db().conversion_history.insert_one(doc)
 
         return FileResponse(
             path=output_path,
@@ -3250,7 +3663,7 @@ async def xlsx_to_pdf(
         doc = history.model_dump()
         doc["timestamp"] = doc["timestamp"].isoformat()
         doc["error"] = str(e)
-        await db.conversion_history.insert_one(doc)
+        await get_db().conversion_history.insert_one(doc)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -3274,7 +3687,7 @@ async def xls_to_pdf(
         )
         doc = history.model_dump()
         doc["timestamp"] = doc["timestamp"].isoformat()
-        await db.conversion_history.insert_one(doc)
+        await get_db().conversion_history.insert_one(doc)
 
         return FileResponse(
             path=output_path,
@@ -3293,7 +3706,7 @@ async def xls_to_pdf(
         doc = history.model_dump()
         doc["timestamp"] = doc["timestamp"].isoformat()
         doc["error"] = str(e)
-        await db.conversion_history.insert_one(doc)
+        await get_db().conversion_history.insert_one(doc)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -3312,7 +3725,7 @@ async def pptx_to_pdf(
     
     return FileResponse(
         path=output_path,
-        filename="converted.pdf",
+        filename=file.filename.replace(".pptx", ".pdf"),
         media_type="application/pdf"
     )
 
@@ -3349,7 +3762,7 @@ async def txt_to_docx(
     
     return FileResponse(
         path=output_path,
-        filename="converted.docx",
+        filename=file.filename.replace(".txt", ".docx"),
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     )
 
@@ -3367,7 +3780,7 @@ async def txt_to_pdf(
     
     return FileResponse(
         path=output_path,
-        filename="converted.pdf",
+        filename=file.filename.replace(".txt", ".pdf"),
         media_type="application/pdf"
     )
 
@@ -3393,7 +3806,7 @@ async def image_to_pdf(
     )
     doc = history.model_dump()
     doc['timestamp'] = doc['timestamp'].isoformat()
-    await db.conversion_history.insert_one(doc)
+    await get_db().conversion_history.insert_one(doc)
 
     return FileResponse(
         path=output_path,
@@ -3466,7 +3879,7 @@ async def images_to_pdf(
         )
         doc = history.model_dump()
         doc['timestamp'] = doc['timestamp'].isoformat()
-        await db.conversion_history.insert_one(doc)
+        await get_db().conversion_history.insert_one(doc)
         
         return FileResponse(
             path=output_path,
@@ -3540,7 +3953,7 @@ async def images_to_pdf_individual(
         )
         doc = history.model_dump()
         doc['timestamp'] = doc['timestamp'].isoformat()
-        await db.conversion_history.insert_one(doc)
+        await get_db().conversion_history.insert_one(doc)
         
         return FileResponse(
             path=output_path,
@@ -3667,6 +4080,60 @@ async def health_check():
     """Health check endpoint for Docker container monitoring"""
     return {"status": "healthy", "service": "file-conversion-api"}
 
+
+@api_router.get("/mongodb-health")
+async def mongodb_health_check():
+    """MongoDB health check endpoint.
+    
+    Returns the connection status and details of MongoDB.
+    Useful for monitoring and debugging MongoDB connectivity.
+    """
+    global mongo_client, mongo_db
+    
+    try:
+        # Check if MongoDB client is initialized
+        if mongo_client is None:
+            return {
+                "status": "unhealthy",
+                "connected": False,
+                "message": "MongoDB client not initialized",
+                "error": "MongoDB connection was not established during startup"
+            }
+        
+        # Try to ping MongoDB to verify connection
+        await mongo_client.admin.command('ping')
+        
+        # Get MongoDB server info
+        server_info = await mongo_client.admin.command('serverStatus')
+        
+        # Get database info
+        db_stats = await mongo_db.command('dbStats')
+        
+        return {
+            "status": "healthy",
+            "connected": True,
+            "database": MONGO_DB_NAME,
+            "client_address": str(mongo_client.address) if mongo_client.address else None,
+            "mongodb_version": server_info.get('version', 'unknown'),
+            "uptime_seconds": server_info.get('uptime', 0),
+            "database_stats": {
+                "collections": db_stats.get('collections', 0),
+                "objects": db_stats.get('objects', 0),
+                "avg_obj_size": db_stats.get('avgObjSize', 0),
+                "data_size_bytes": db_stats.get('dataSize', 0),
+                "storage_size_bytes": db_stats.get('storageSize', 0),
+            }
+        }
+        
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "connected": False,
+            "message": "MongoDB connection failed",
+            "error": str(e),
+            "suggestion": "Check that MongoDB is running and the MONGO_URL is correct"
+        }
+
 @api_router.post("/convert/image")
 async def convert_image(
     file: UploadFile = File(...),
@@ -3694,7 +4161,7 @@ async def convert_image(
         )
         doc = history.model_dump()
         doc['timestamp'] = doc['timestamp'].isoformat()
-        await db.conversion_history.insert_one(doc)
+        await get_db().conversion_history.insert_one(doc)
 
         return FileResponse(
             path=output_path,
@@ -3778,7 +4245,7 @@ async def resize_image_endpoint(
         )
         doc = history.model_dump()
         doc['timestamp'] = doc['timestamp'].isoformat()
-        await db.conversion_history.insert_one(doc)
+        await get_db().conversion_history.insert_one(doc)
         
         # Determine media type
         media_types = {
@@ -3813,7 +4280,7 @@ async def resize_image_endpoint(
         doc = history.model_dump()
         doc['timestamp'] = doc['timestamp'].isoformat()
         doc['error'] = str(e)
-        await db.conversion_history.insert_one(doc)
+        await get_db().conversion_history.insert_one(doc)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -3900,7 +4367,7 @@ async def resize_images_endpoint(
         )
         doc = history.model_dump()
         doc['timestamp'] = doc['timestamp'].isoformat()
-        await db.conversion_history.insert_one(doc)
+        await get_db().conversion_history.insert_one(doc)
         
         return FileResponse(
             path=output_path,
@@ -4253,13 +4720,145 @@ async def extract_text_ocr(
         )
         doc = history.model_dump()
         doc['timestamp'] = doc['timestamp'].isoformat()
-        await db.conversion_history.insert_one(doc)
+        await get_db().conversion_history.insert_one(doc)
 
         return {"text": text, "filename": file.filename, "language": language}
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============== SMART OCR ENDPOINTS ==============
+
+@api_router.post("/ocr/detect-smart")
+async def smart_detect_language_endpoint(
+    file: UploadFile = File(...)
+):
+    """Smart language detection with multi-stage analysis.
+    
+    Uses Tesseract OSD + statistical n-gram analysis for better language detection.
+    Returns confidence scores and multiple language suggestions.
+    """
+    try:
+        input_path = save_upload_file_tmp(file)
+        
+        # Use smart detection service
+        detection_result = smart_detect_language_from_image(
+            input_path, 
+            AVAILABLE_OCR_LANGUAGES
+        )
+        
+        # Format for response
+        response = format_detection_result(detection_result)
+        
+        # Add full language names for suggestions
+        if response and response.get('languages'):
+            for lang in response['languages']:
+                lang['name'] = LANGUAGE_NAMES.get(lang['code'], lang['code'].title())
+        
+        return {
+            "success": True,
+            "detection": response,
+            "available_languages": AVAILABLE_OCR_LANGUAGES,
+            "filename": file.filename
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Smart language detection failed: {str(e)}")
+
+
+@api_router.post("/ocr/extract-smart")
+async def smart_extract_text_ocr(
+    file: UploadFile = File(...),
+    preferred_language: Optional[str] = Form(None)
+):
+    """Smart OCR with automatic language detection and fallback.
+    
+    Automatically detects the best language for OCR extraction.
+    Falls back to alternative languages if primary detection fails.
+    Provides confidence scores and detection details.
+    """
+    try:
+        input_path = save_upload_file_tmp(file)
+        
+        # Use smart OCR with detection
+        ocr_result = smart_ocr_image(
+            input_path,
+            AVAILABLE_OCR_LANGUAGES,
+            preferred_language
+        )
+        
+        # Build response
+        response = {
+            "success": ocr_result.get('success', False),
+            "text": ocr_result.get('text'),
+            "language": ocr_result.get('language'),
+            "language_confidence": ocr_result.get('language_confidence', 0),
+            "filename": file.filename,
+            "detection": format_detection_result(ocr_result.get('detection')),
+            "attempts": ocr_result.get('attempts', []),
+            "suggestions": ocr_result.get('suggestions', []),
+            "error": ocr_result.get('error')
+        }
+        
+        # Save to history if successful
+        if ocr_result.get('success'):
+            history = ConversionHistory(
+                conversion_type="ocr_smart",
+                source_format=input_path.suffix.lower().replace('.', ''),
+                target_format="text",
+                filename=file.filename,
+                status="success"
+            )
+            doc = history.model_dump()
+            doc['timestamp'] = doc['timestamp'].isoformat()
+            await get_db().conversion_history.insert_one(doc)
+        
+        return response
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Smart OCR extraction failed: {str(e)}")
+
+
+@api_router.get("/ocr/detection-info")
+async def get_ocr_detection_info():
+    """Get information about smart language detection capabilities"""
+    return {
+        "description": "Smart OCR language detection with multi-stage analysis",
+        "stages": [
+            {
+                "name": "osd_detection",
+                "description": "Tesseract Orientation and Script Detection",
+                "accuracy": "~90% for script type"
+            },
+            {
+                "name": "sample_ocr",
+                "description": "Quick OCR sample with candidate languages",
+                "accuracy": "Varies by language quality"
+            },
+            {
+                "name": "ngram_analysis",
+                "description": "Statistical n-gram frequency analysis",
+                "accuracy": "~80% for supported languages"
+            },
+            {
+                "name": "confidence_scoring",
+                "description": "Weighted combination of all signals",
+                "accuracy": "Best overall accuracy"
+            }
+        ],
+        "supported_scripts": list(SCRIPT_TO_LANGUAGES.keys()),
+        "supported_languages_count": len(LANGUAGE_NGRAMS),
+        "confidence_levels": {
+            "high": "80-100% - Very confident detection",
+            "medium": "50-79% - Good detection, verify if critical",
+            "low": "30-49% - Uncertain, manual review recommended",
+            "very_low": "0-29% - Very uncertain, manual selection needed"
+        },
+        "endpoint_description": {
+            "/ocr/detect-smart": "Get language detection with confidence scores",
+            "/ocr/extract-smart": "Auto-detect language and extract text with fallback"
+        }
+    }
 
 @api_router.post("/search/pdf")
 async def search_in_pdf_endpoint(
@@ -4284,7 +4883,7 @@ async def search_in_pdf_endpoint(
         )
         doc = history.model_dump()
         doc['timestamp'] = doc['timestamp'].isoformat()
-        await db.conversion_history.insert_one(doc)
+        await get_db().conversion_history.insert_one(doc)
 
         return results
     except HTTPException:
@@ -4295,7 +4894,7 @@ async def search_in_pdf_endpoint(
 @api_router.get("/history", response_model=List[ConversionHistory])
 async def get_conversion_history():
     """Get conversion history"""
-    history = await db.conversion_history.find({}, {"_id": 0}).sort("timestamp", -1).to_list(100)
+    history = await get_db().conversion_history.find({}, {"_id": 0}).sort("timestamp", -1).to_list(100)
     
     for item in history:
         if isinstance(item['timestamp'], str):
@@ -4383,7 +4982,7 @@ async def add_text_watermark_endpoint(
         )
         doc = history.model_dump()
         doc['timestamp'] = doc['timestamp'].isoformat()
-        await db.conversion_history.insert_one(doc)
+        await get_db().conversion_history.insert_one(doc)
         
         return FileResponse(
             path=output_path,
@@ -4410,7 +5009,7 @@ async def add_text_watermark_endpoint(
         doc = history.model_dump()
         doc['timestamp'] = doc['timestamp'].isoformat()
         doc['error'] = error_msg
-        await db.conversion_history.insert_one(doc)
+        await get_db().conversion_history.insert_one(doc)
         raise HTTPException(status_code=500, detail=error_msg)
 
 
@@ -4481,7 +5080,7 @@ async def add_image_watermark_endpoint(
         )
         doc = history.model_dump()
         doc['timestamp'] = doc['timestamp'].isoformat()
-        await db.conversion_history.insert_one(doc)
+        await get_db().conversion_history.insert_one(doc)
         
         return FileResponse(
             path=output_path,
@@ -4508,7 +5107,7 @@ async def add_image_watermark_endpoint(
         doc = history.model_dump()
         doc['timestamp'] = doc['timestamp'].isoformat()
         doc['error'] = error_msg
-        await db.conversion_history.insert_one(doc)
+        await get_db().conversion_history.insert_one(doc)
         raise HTTPException(status_code=500, detail=error_msg)
 
 
@@ -4667,6 +5266,420 @@ async def get_watermark_options():
             "rotation": 0
         }
     }
+
+
+# ============== QR Code Generator Routes ==============
+
+# Initialize QR Code generator
+qrcode_generator = QRCodeGenerator()
+
+
+class QRCodeRequest(BaseModel):
+    """Request model for QR code generation"""
+    qr_type: str = "url"  # url, pdf_link, multi_url, contact, text, app, sms, email, phone
+    data: Dict = {}
+    size: int = 300
+    color_theme: str = "classic"  # classic, blue, green, red, purple, orange, pink, teal
+    foreground: Optional[str] = None  # Custom hex color
+    background: Optional[str] = None  # Custom hex color
+    error_correction: str = "H"  # L, M, Q, H
+
+
+@api_router.get("/qrcode/options")
+async def get_qrcode_options():
+    """Get available QR code generation options"""
+    options = qrcode_generator.get_options()
+    return {
+        "success": True,
+        "options": options
+    }
+
+
+@api_router.post("/qrcode/generate")
+async def generate_qrcode(
+    qr_type: Optional[str] = Form(None),
+    size: int = Form(300),
+    color_theme: str = Form("classic"),
+    error_correction: str = Form("H"),
+    foreground: Optional[str] = Form(None),
+    background: Optional[str] = Form(None),
+    # URL data
+    url: Optional[str] = Form(None),
+    pdf_url: Optional[str] = Form(None),
+    text: Optional[str] = Form(None),
+    # Multi-URL data
+    urls_json: Optional[str] = Form(None),
+    # Contact data
+    first_name: Optional[str] = Form(None),
+    last_name: Optional[str] = Form(None),
+    phone: Optional[str] = Form(None),
+    email: Optional[str] = Form(None),
+    organization: Optional[str] = Form(None),
+    title: Optional[str] = Form(None),
+    website: Optional[str] = Form(None),
+    address: Optional[str] = Form(None),
+    # App data
+    app_id: Optional[str] = Form(None),
+    store: str = Form("google"),
+    # SMS data
+    sms_phone: Optional[str] = Form(None),
+    message: Optional[str] = Form(None),
+    # Email data
+    email_address: Optional[str] = Form(None),
+    subject: Optional[str] = Form(None),
+    body: Optional[str] = Form(None),
+    # Phone data
+    phone_number: Optional[str] = Form(None),
+):
+    """Generate QR code and return as base64 image"""
+    try:
+        # Check if qr_type is provided
+        if not qr_type:
+            raise HTTPException(
+                status_code=400,
+                detail="QR type (qr_type) is required. Supported types: url, pdf_link, text, multi_url, contact, app, sms, email, phone"
+            )
+        
+        print(f"[QRCODE] Generating base64 QR code with type: {qr_type}")
+        
+        # Parse QR type
+        try:
+            qr_type_enum = QRType(qr_type)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid QR type: {qr_type}")
+        
+        # Parse error correction level
+        try:
+            error_correction_enum = ErrorCorrection(error_correction)
+        except ValueError:
+            error_correction_enum = ErrorCorrection.H
+        
+        # Build color configuration
+        if foreground or background:
+            color = QRColor(
+                foreground=foreground or "#000000",
+                background=background or "#FFFFFF"
+            )
+        else:
+            color = COLOR_THEMES.get(color_theme, COLOR_THEMES["classic"])
+        
+        # Build data based on QR type
+        data = {}
+        if qr_type == "url" and url:
+            data["url"] = url
+        elif qr_type == "pdf_link" and pdf_url:
+            data["pdf_url"] = pdf_url
+        elif qr_type == "text" and text:
+            data["text"] = text
+        elif qr_type == "multi_url" and urls_json:
+            try:
+                import json
+                data["urls"] = json.loads(urls_json)
+            except json.JSONDecodeError:
+                raise HTTPException(status_code=400, detail="Invalid URLs JSON format")
+        elif qr_type == "contact":
+            data["first_name"] = first_name or ""
+            data["last_name"] = last_name or ""
+            data["phone"] = phone or ""
+            data["email"] = email or ""
+            data["organization"] = organization or ""
+            data["title"] = title or ""
+            data["website"] = website or ""
+            data["address"] = address or ""
+        elif qr_type == "app" and app_id:
+            data["app_id"] = app_id
+            data["store"] = store or "google"
+        elif qr_type == "sms" and sms_phone:
+            data["phone"] = sms_phone
+            data["message"] = message or ""
+        elif qr_type == "email" and email_address:
+            data["email"] = email_address
+            data["subject"] = subject or ""
+            data["body"] = body or ""
+        elif qr_type == "phone" and phone_number:
+            data["phone"] = phone_number
+        else:
+            raise HTTPException(status_code=400, detail=f"Missing required data for QR type: {qr_type}")
+        
+        print(f"[QRCODE] Data: {data}")
+        
+        # Generate QR code
+        image, content = qrcode_generator.generate_qr(
+            qr_type=qr_type_enum,
+            data=data,
+            size=size,
+            color=color,
+            error_correction=error_correction_enum
+        )
+        
+        print(f"[QRCODE] Generated successfully, content length: {len(content)}")
+        
+        # Convert to base64
+        import base64
+        import io
+        buffer = io.BytesIO()
+        image.save(buffer, format="PNG")
+        img_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+        
+        return {
+            "success": True,
+            "qr_type": qr_type,
+            "content": content,
+            "image": f"data:image/png;base64,{img_base64}",
+            "size": size,
+            "color_theme": color_theme
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[QRCODE ERROR] {type(e).__name__}: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"QR code generation failed: {str(e)}")
+
+
+@api_router.post("/qrcode/generate/{format}")
+async def generate_qrcode_format(
+    format: str,
+    qr_type: Optional[str] = Form(None),
+    size: int = Form(300),
+    color_theme: str = Form("classic"),
+    error_correction: str = Form("H"),
+    foreground: Optional[str] = Form(None),
+    background: Optional[str] = Form(None),
+    # URL data
+    url: Optional[str] = Form(None),
+    pdf_url: Optional[str] = Form(None),
+    text: Optional[str] = Form(None),
+    # Multi-URL data
+    urls_json: Optional[str] = Form(None),
+    # Contact data
+    first_name: Optional[str] = Form(None),
+    last_name: Optional[str] = Form(None),
+    phone: Optional[str] = Form(None),
+    email: Optional[str] = Form(None),
+    organization: Optional[str] = Form(None),
+    title: Optional[str] = Form(None),
+    website: Optional[str] = Form(None),
+    address: Optional[str] = Form(None),
+    # App data
+    app_id: Optional[str] = Form(None),
+    store: str = Form("google"),
+    # SMS data
+    sms_phone: Optional[str] = Form(None),
+    message: Optional[str] = Form(None),
+    # Email data
+    email_address: Optional[str] = Form(None),
+    subject: Optional[str] = Form(None),
+    body: Optional[str] = Form(None),
+    # Phone data
+    phone_number: Optional[str] = Form(None),
+):
+    """Generate QR code and return as specified format (png, svg, pdf)
+
+    This unified endpoint handles all format requests dynamically.
+    Uses Form data for better compatibility with various clients.
+    """
+    try:
+        # Check if qr_type is provided
+        if not qr_type:
+            raise HTTPException(
+                status_code=400,
+                detail="QR type (qr_type) is required. Supported types: url, pdf_link, text, multi_url, contact, app, sms, email, phone"
+            )
+        
+        # Validate format
+        valid_formats = ['png', 'svg', 'pdf']
+        format_lower = format.lower()
+        if format_lower not in valid_formats:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid format: {format}. Must be one of: {', '.join(valid_formats)}"
+            )
+        
+        # Parse QR type
+        try:
+            qr_type_enum = QRType(qr_type)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid QR type: {qr_type}")
+        
+        # Parse error correction level
+        try:
+            error_correction_enum = ErrorCorrection(error_correction)
+        except ValueError:
+            error_correction_enum = ErrorCorrection.H
+        
+        # Build color configuration
+        if foreground or background:
+            color = QRColor(
+                foreground=foreground or "#000000",
+                background=background or "#FFFFFF"
+            )
+        else:
+            color = COLOR_THEMES.get(color_theme, COLOR_THEMES["classic"])
+        
+        # Build data based on QR type
+        data = {}
+        if qr_type == "url" and url:
+            data["url"] = url
+        elif qr_type == "pdf_link" and pdf_url:
+            data["pdf_url"] = pdf_url
+        elif qr_type == "text" and text:
+            data["text"] = text
+        elif qr_type == "multi_url" and urls_json:
+            try:
+                import json
+                data["urls"] = json.loads(urls_json)
+            except json.JSONDecodeError:
+                raise HTTPException(status_code=400, detail="Invalid URLs JSON format")
+        elif qr_type == "contact":
+            data["first_name"] = first_name or ""
+            data["last_name"] = last_name or ""
+            data["phone"] = phone or ""
+            data["email"] = email or ""
+            data["organization"] = organization or ""
+            data["title"] = title or ""
+            data["website"] = website or ""
+            data["address"] = address or ""
+        elif qr_type == "app" and app_id:
+            data["app_id"] = app_id
+            data["store"] = store or "google"
+        elif qr_type == "sms" and sms_phone:
+            data["phone"] = sms_phone
+            data["message"] = message or ""
+        elif qr_type == "email" and email_address:
+            data["email"] = email_address
+            data["subject"] = subject or ""
+            data["body"] = body or ""
+        elif qr_type == "phone" and phone_number:
+            data["phone"] = phone_number
+        else:
+            raise HTTPException(status_code=400, detail=f"Missing required data for QR type: {qr_type}")
+        
+        print(f"[QRCODE] Data: {data}")
+        
+        # Generate QR code
+        image, content = qrcode_generator.generate_qr(
+            qr_type=qr_type_enum,
+            data=data,
+            size=size,
+            color=color,
+            error_correction=error_correction_enum
+        )
+        
+        print(f"[QRCODE] Generated successfully, content length: {len(content)}")
+        
+        # Return based on format
+        if format_lower == 'png':
+            # Save to file and return as PNG
+            filepath, file_size = qrcode_generator.save_png(image)
+            print(f"[QRCODE] PNG saved: {filepath} ({file_size} bytes)")
+            return FileResponse(
+                path=filepath,
+                filename=f"qrcode_{qr_type}.png",
+                media_type="image/png"
+            )
+        
+        elif format_lower == 'svg':
+            # Generate content and save as SVG
+            content_for_svg = _generate_qr_content(qr_type_enum, data)
+            filepath, file_size = qrcode_generator.save_svg(content_for_svg, color=color)
+            print(f"[QRCODE] SVG saved: {filepath} ({file_size} bytes)")
+            return FileResponse(
+                path=filepath,
+                filename=f"qrcode_{qr_type}.svg",
+                media_type="image/svg+xml"
+            )
+        
+        elif format_lower == 'pdf':
+            # Save as PDF
+            filepath, file_size = qrcode_generator.save_pdf(image)
+            print(f"[QRCODE] PDF saved: {filepath} ({file_size} bytes)")
+            return FileResponse(
+                path=filepath,
+                filename=f"qrcode_{qr_type}.pdf",
+                media_type="application/pdf"
+            )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[QRCODE ERROR] {type(e).__name__}: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"QR code generation failed: {str(e)}")
+
+
+def _generate_qr_content(qr_type: QRType, data: Dict) -> str:
+    """Generate QR code content string based on type"""
+    import json
+    
+    if qr_type == QRType.URL:
+        content = data.get('url', '')
+        if not content.startswith(('http://', 'https://')):
+            content = 'https://' + content
+    elif qr_type == QRType.PDF_LINK:
+        content = data.get('pdf_url', '')
+    elif qr_type == QRType.MULTI_URL:
+        content = json.dumps(data.get('urls', []), ensure_ascii=False)
+    elif qr_type == QRType.CONTACT:
+        first_name = data.get('first_name', '')
+        last_name = data.get('last_name', '')
+        phone = data.get('phone', '')
+        email = data.get('email', '')
+        organization = data.get('organization', '')
+        title = data.get('title', '')
+        website = data.get('website', '')
+        address = data.get('address', '')
+        content = f"""BEGIN:VCARD
+VERSION:3.0
+N:{last_name};{first_name};;;
+FN:{first_name} {last_name}
+ORG:{organization}
+TITLE:{title}
+TEL;TYPE=CELL:{phone}
+EMAIL;TYPE=WORK:{email}
+URL:{website}
+ADR;TYPE=WORK:;;{address};;;;
+END:VCARD"""
+    elif qr_type == QRType.TEXT:
+        content = data.get('text', '')
+    elif qr_type == QRType.APP:
+        app_id = data.get('app_id', '')
+        store = data.get('store', 'google')
+        if store.lower() == "google":
+            content = f"https://play.google.com/store/apps/details?id={app_id}"
+        else:
+            content = f"https://apps.apple.com/app/id{app_id}"
+    elif qr_type == QRType.SMS:
+        phone = data.get('phone', '')
+        message = data.get('message', '')
+        if message:
+            content = f"SMS:{phone}?body={message}"
+        else:
+            content = f"SMS:{phone}"
+    elif qr_type == QRType.EMAIL:
+        email = data.get('email', '')
+        subject = data.get('subject', '')
+        body = data.get('body', '')
+        if subject or body:
+            subject_encoded = quote(subject) if subject else ''
+            body_encoded = quote(body) if body else ''
+            params = []
+            if subject_encoded:
+                params.append(f"subject={subject_encoded}")
+            if body_encoded:
+                params.append(f"body={body_encoded}")
+            content = f"mailto:{email}?{'&'.join(params)}"
+        else:
+            content = f"mailto:{email}"
+    elif qr_type == QRType.PHONE:
+        content = f"tel:{data.get('phone', '')}"
+    else:
+        content = str(data)
+    
+    return content
 
 
 # Include the router in the main app

@@ -5,13 +5,18 @@ This module provides functions to add text and image watermarks to PDF files.
 Supports various customization options including rotation, opacity, position, etc.
 """
 
+import sys
+import traceback
 from pathlib import Path
 from typing import List, Optional, Tuple
 from pypdf import PdfReader, PdfWriter
+from pypdf.errors import PdfStreamError, PdfReadError
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter, A4
 from reportlab.lib.colors import Color
 from reportlab.lib import colors as reportlab_colors
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 from PIL import Image
 import io
 import math
@@ -29,6 +34,97 @@ POSITION_TOP_RIGHT = "top_right"
 POSITION_BOTTOM_LEFT = "bottom_left"
 POSITION_BOTTOM_RIGHT = "bottom_right"
 POSITION_TILED = "tiled"
+
+# Enhanced font mapping for ReportLab compatibility
+REPORTLAB_FONTS = {
+    "Helvetica": "Helvetica",
+    "Helvetica-Bold": "Helvetica-Bold",
+    "Helvetica-Oblique": "Helvetica-Oblique",
+    "Helvetica-BoldOblique": "Helvetica-BoldOblique",
+    "Times-Roman": "Times-Roman",
+    "Times-Bold": "Times-Bold",
+    "Times-Italic": "Times-Italic",
+    "Times-BoldItalic": "Times-BoldItalic",
+    "Courier": "Courier",
+    "Courier-Bold": "Courier-Bold",
+    "Courier-Oblique": "Courier-Oblique",
+    "Courier-BoldOblique": "Courier-BoldOblique",
+    "Symbol": "Symbol",
+    "ZapfDingbats": "ZapfDingbats",
+}
+
+
+def validate_pdf_file(file_path: Path) -> Tuple[bool, str]:
+    """
+    Validate PDF file before processing.
+    
+    This function checks:
+    1. File exists and is readable
+    2. File has valid PDF header (%PDF-)
+    3. File size is reasonable (not empty, not too large)
+    4. File can be opened by pypdf
+    
+    Args:
+        file_path: Path to the PDF file
+        
+    Returns:
+        Tuple of (is_valid: bool, error_message: str)
+    """
+    # Check file exists
+    if not file_path.exists():
+        return False, f"PDF file does not exist: {file_path}"
+    
+    # Check file size
+    file_size = file_path.stat().st_size
+    if file_size == 0:
+        return False, "PDF file is empty (0 bytes)"
+    
+    # Minimum PDF size is very small, but let's check for reasonable size
+    # A single page PDF should be at least ~100 bytes
+    MIN_PDF_SIZE = 100
+    if file_size < MIN_PDF_SIZE:
+        return False, f"PDF file is too small ({file_size} bytes). Minimum size is {MIN_PDF_SIZE} bytes."
+    
+    # Maximum file size (e.g., 100MB)
+    MAX_PDF_SIZE = 100 * 1024 * 1024
+    if file_size > MAX_PDF_SIZE:
+        return False, f"PDF file is too large ({file_size / (1024*1024):.1f} MB). Maximum size is {MAX_PDF_SIZE / (1024*1024):.0f} MB."
+    
+    # Check PDF header (magic bytes)
+    try:
+        with open(file_path, 'rb') as f:
+            header = f.read(8)
+            if not header.startswith(b'%PDF-'):
+                return False, f"Invalid PDF file: missing PDF header. File starts with: {header[:8]}"
+    except Exception as e:
+        return False, f"Failed to read PDF header: {str(e)}"
+    
+    # Try to open with pypdf to verify it's a valid PDF
+    try:
+        reader = PdfReader(str(file_path))
+        # Try to get number of pages to fully validate
+        num_pages = len(reader.pages)
+        print(f"[WATERMARK] PDF validation passed: {num_pages} pages, {file_size} bytes")
+        return True, ""
+    except PdfStreamError as e:
+        return False, f"PDF stream error: {str(e)}. The file may be corrupted or truncated."
+    except PdfReadError as e:
+        return False, f"PDF read error: {str(e)}. The file may be corrupted."
+    except Exception as e:
+        return False, f"Failed to open PDF: {str(e)}"
+
+def _get_valid_font_name(font_name: str) -> str:
+    """Get a valid ReportLab font name, with fallback to Helvetica if not found."""
+    if font_name in REPORTLAB_FONTS:
+        return font_name
+    
+    # Try partial matching
+    for valid_font in REPORTLAB_FONTS.keys():
+        if valid_font.lower().replace("-", "") == font_name.lower().replace("-", ""):
+            return valid_font
+    
+    # Fallback to Helvetica
+    return "Helvetica"
 
 
 def _hex_to_rgb(hex_color: str) -> Tuple[float, float, float]:
@@ -114,18 +210,27 @@ def _create_text_watermark_page(
     # Set transparency
     watermark_canvas.setFillColor(Color(color_rgb[0], color_rgb[1], color_rgb[2], alpha=opacity))
     
-    # Set font
-    try:
-        watermark_canvas.setFont(font_name, font_size)
-    except Exception:
-        # Fallback to Helvetica-Bold if font not available
-        try:
-            watermark_canvas.setFont("Helvetica-Bold", font_size)
-        except Exception:
-            watermark_canvas.setFont("Helvetica", font_size)
+    # Use validated font name
+    valid_font_name = _get_valid_font_name(font_name)
     
-    # Calculate text size for positioning
-    text_width = watermark_canvas.stringWidth(text, font_name, font_size)
+    # Set font with error handling
+    try:
+        watermark_canvas.setFont(valid_font_name, font_size)
+    except Exception as font_error:
+        print(f"[WATERMARK] Font error for '{font_name}': {font_error}, falling back to Helvetica")
+        try:
+            watermark_canvas.setFont("Helvetica", font_size)
+            valid_font_name = "Helvetica"
+        except Exception:
+            watermark_canvas.setFont("Helvetica-Bold", font_size)
+            valid_font_name = "Helvetica-Bold"
+    
+    # Calculate text size for positioning using the validated font
+    try:
+        text_width = watermark_canvas.stringWidth(text, valid_font_name, font_size)
+    except Exception:
+        # Fallback calculation
+        text_width = len(text) * font_size * 0.6
     text_height = font_size  # Approximate text height
     
     if is_tiled:
@@ -175,9 +280,15 @@ def _create_text_watermark_page(
         if outline:
             watermark_canvas.setStrokeColor(Color(outline_rgb[0], outline_rgb[1], outline_rgb[2], alpha=1))
             watermark_canvas.setLineWidth(0.5)
-            watermark_canvas.drawCentredString(x + text_width/2, y, text)
+            try:
+                watermark_canvas.drawCentredString(x + text_width/2, y, text)
+            except Exception:
+                watermark_canvas.drawCentredString(center_x, y, text)
         else:
-            watermark_canvas.drawCentredString(x, y, text)
+            try:
+                watermark_canvas.drawCentredString(x + text_width/2, y, text)
+            except Exception:
+                watermark_canvas.drawCentredString(center_x, y, text)
         
         watermark_canvas.restoreState()
     
@@ -224,96 +335,139 @@ def add_text_watermark(
     Returns:
         Path to watermarked PDF
     """
+    print(f"[WATERMARK] Starting add_text_watermark for: {pdf_path}")
+    print(f"[WATERMARK] Text: '{text}', Font: {font_name}, Size: {font_size}, Color: {color}, Opacity: {opacity}, Rotation: {rotation}")
+    
     # Validate inputs
     if not pdf_path or not pdf_path.exists():
-        raise ValueError(f"PDF file not found: {pdf_path}")
+        error_msg = f"PDF file not found: {pdf_path}"
+        print(f"[WATERMARK ERROR] {error_msg}")
+        raise ValueError(error_msg)
     
     if not text or not text.strip():
-        raise ValueError("Watermark text cannot be empty")
+        error_msg = "Watermark text cannot be empty"
+        print(f"[WATERMARK ERROR] {error_msg}")
+        raise ValueError(error_msg)
     
-    # Read the input PDF
-    reader = PdfReader(str(pdf_path))
-    
-    # Check if PDF is encrypted
-    if reader.is_encrypted:
-        raise ValueError(
-            "The PDF file is encrypted/protected. Please unlock it first using the "
-            "/api/pdf/unlock endpoint before adding a watermark."
-        )
-    
-    writer = PdfWriter()
-    
-    # Calculate RGB color
-    r, g, b = _hex_to_rgb(color)
-    outline_r, outline_g, outline_b = _hex_to_rgb(outline_color) if outline else (0, 0, 0)
-    
-    # Convert page ranges if provided
-    pages_to_watermark = None
-    if page_ranges:
-        pages_to_watermark = set()
-        ranges = page_ranges.split(',')
-        for range_str in ranges:
-            range_str = range_str.strip()
-            if '-' in range_str:
-                parts = range_str.split('-')
-                if len(parts) == 2:
+    try:
+        # Validate PDF file before processing
+        print(f"[WATERMARK] Validating PDF file...")
+        is_valid, validation_error = validate_pdf_file(pdf_path)
+        
+        if not is_valid:
+            error_msg = f"Invalid PDF file: {validation_error}"
+            print(f"[WATERMARK ERROR] {error_msg}")
+            raise ValueError(error_msg)
+        
+        # Read the input PDF
+        print(f"[WATERMARK] Reading PDF...")
+        reader = PdfReader(str(pdf_path))
+        num_pages = len(reader.pages)
+        print(f"[WATERMARK] PDF has {num_pages} pages")
+        
+        # Check if PDF is encrypted
+        if reader.is_encrypted:
+            error_msg = (
+                "The PDF file is encrypted/protected. Please unlock it first using the "
+                "/api/pdf/unlock endpoint before adding a watermark."
+            )
+            print(f"[WATERMARK ERROR] {error_msg}")
+            raise ValueError(error_msg)
+        
+        writer = PdfWriter()
+        
+        # Calculate RGB color
+        r, g, b = _hex_to_rgb(color)
+        outline_r, outline_g, outline_b = _hex_to_rgb(outline_color) if outline else (0, 0, 0)
+        
+        print(f"[WATERMARK] Color: RGB({r:.2f}, {g:.2f}, {b:.2f})")
+        
+        # Convert page ranges if provided
+        pages_to_watermark = None
+        if page_ranges:
+            pages_to_watermark = set()
+            ranges = page_ranges.split(',')
+            for range_str in ranges:
+                range_str = range_str.strip()
+                if '-' in range_str:
+                    parts = range_str.split('-')
+                    if len(parts) == 2:
+                        try:
+                            start = int(parts[0])
+                            end = int(parts[1])
+                            for page_num in range(start - 1, min(end, len(reader.pages))):
+                                pages_to_watermark.add(page_num)
+                        except ValueError:
+                            print(f"[WATERMARK] Invalid page range: {range_str}")
+                            continue
+                else:
                     try:
-                        start = int(parts[0])
-                        end = int(parts[1])
-                        for page_num in range(start - 1, min(end, len(reader.pages))):
+                        page_num = int(range_str) - 1
+                        if 0 <= page_num < len(reader.pages):
                             pages_to_watermark.add(page_num)
                     except ValueError:
+                        print(f"[WATERMARK] Invalid page number: {range_str}")
                         continue
+        
+        print(f"[WATERMARK] Watermarking {num_pages} pages")
+        
+        # Create watermark overlay for each source page
+        for page_num, page in enumerate(reader.pages):
+            page_width, page_height = _get_page_size(page)
+            
+            # Create watermark overlay
+            watermark_pdf = _create_text_watermark_page(
+                text=text,
+                font_name=font_name,
+                font_size=font_size,
+                color_rgb=(r, g, b),
+                outline_rgb=(outline_r, outline_g, outline_b),
+                opacity=opacity,
+                rotation=rotation,
+                page_width=page_width,
+                page_height=page_height,
+                position=position,
+                margin_x=margin_x,
+                margin_y=margin_y,
+                outline=outline,
+                is_tiled=(position == POSITION_TILED)
+            )
+            
+            watermark_page = watermark_pdf.pages[0]
+            
+            # Add watermark to page
+            if first_page_only:
+                if page_num == 0:
+                    page.merge_page(watermark_page)
+            elif pages_to_watermark is not None:
+                if page_num in pages_to_watermark:
+                    page.merge_page(watermark_page)
             else:
-                try:
-                    page_num = int(range_str) - 1
-                    if 0 <= page_num < len(reader.pages):
-                        pages_to_watermark.add(page_num)
-                except ValueError:
-                    continue
-    
-    # Create watermark overlay for each source page
-    for page_num, page in enumerate(reader.pages):
-        page_width, page_height = _get_page_size(page)
-        
-        # Create watermark overlay
-        watermark_pdf = _create_text_watermark_page(
-            text=text,
-            font_name=font_name,
-            font_size=font_size,
-            color_rgb=(r, g, b),
-            outline_rgb=(outline_r, outline_g, outline_b),
-            opacity=opacity,
-            rotation=rotation,
-            page_width=page_width,
-            page_height=page_height,
-            position=position,
-            margin_x=margin_x,
-            margin_y=margin_y,
-            outline=outline,
-            is_tiled=(position == POSITION_TILED)
-        )
-        
-        watermark_page = watermark_pdf.pages[0]
-        
-        # Add watermark to page
-        if first_page_only:
-            if page_num == 0:
                 page.merge_page(watermark_page)
-        elif pages_to_watermark is not None:
-            if page_num in pages_to_watermark:
-                page.merge_page(watermark_page)
+            
+            writer.add_page(page)
+        
+        # Save output
+        output_path = TEMP_DIR / f"{uuid.uuid4()}_watermarked.pdf"
+        print(f"[WATERMARK] Saving watermarked PDF to: {output_path}")
+        
+        with open(output_path, "wb") as output_file:
+            writer.write(output_file)
+        
+        # Verify output was created
+        if output_path.exists() and output_path.stat().st_size > 0:
+            print(f"[WATERMARK] SUCCESS: Watermarked PDF created ({output_path.stat().st_size} bytes)")
+            return output_path
         else:
-            page.merge_page(watermark_page)
-        
-        writer.add_page(page)
-    
-    # Save output
-    output_path = TEMP_DIR / f"{uuid.uuid4()}_watermarked.pdf"
-    with open(output_path, "wb") as output_file:
-        writer.write(output_file)
-    
-    return output_path
+            error_msg = "Watermark output file was not created properly"
+            print(f"[WATERMARK ERROR] {error_msg}")
+            raise ValueError(error_msg)
+            
+    except Exception as e:
+        error_msg = f"Failed to add text watermark: {str(e)}"
+        print(f"[WATERMARK ERROR] {error_msg}")
+        print(f"[WATERMARK ERROR] Traceback: {traceback.format_exc()}")
+        raise ValueError(error_msg)
 
 
 def _create_image_watermark_page(
@@ -407,43 +561,70 @@ def add_image_watermark(
     Returns:
         Path to watermarked PDF
     """
+    print(f"[WATERMARK] Starting add_image_watermark for: {pdf_path}")
+    print(f"[WATERMARK] Image: {image_path}, Opacity: {opacity}, Scale: {scale}, Rotation: {rotation}")
+    
     # Validate inputs
     if not pdf_path or not pdf_path.exists():
-        raise ValueError(f"PDF file not found: {pdf_path}")
+        error_msg = f"PDF file not found: {pdf_path}"
+        print(f"[WATERMARK ERROR] {error_msg}")
+        raise ValueError(error_msg)
     
     if not image_path or not image_path.exists():
-        raise ValueError(f"Image file not found: {image_path}")
+        error_msg = f"Image file not found: {image_path}"
+        print(f"[WATERMARK ERROR] {error_msg}")
+        raise ValueError(error_msg)
     
-    # Read the input PDF
-    reader = PdfReader(str(pdf_path))
-    
-    # Check if PDF is encrypted
-    if reader.is_encrypted:
-        raise ValueError(
-            "The PDF file is encrypted/protected. Please unlock it first using the "
-            "/api/pdf/unlock endpoint before adding a watermark."
-        )
-    
-    writer = PdfWriter()
-    
-    # Load and prepare watermark image
-    img = Image.open(image_path)
-    
-    # Convert to RGBA if necessary for transparency support
-    if img.mode != 'RGBA':
-        img = img.convert('RGBA')
-    
-    # Get original dimensions
-    orig_width, orig_height = img.size
-    
-    if orig_width == 0 or orig_height == 0:
-        raise ValueError("Image has invalid dimensions")
-    
-    # Save image to a temporary file for reportlab to use
     temp_img_path = None
+    
     try:
+        # Validate PDF file before processing
+        print(f"[WATERMARK] Validating PDF file...")
+        is_valid, validation_error = validate_pdf_file(pdf_path)
+        
+        if not is_valid:
+            error_msg = f"Invalid PDF file: {validation_error}"
+            print(f"[WATERMARK ERROR] {error_msg}")
+            raise ValueError(error_msg)
+        
+        # Read the input PDF
+        print(f"[WATERMARK] Reading PDF...")
+        reader = PdfReader(str(pdf_path))
+        num_pages = len(reader.pages)
+        print(f"[WATERMARK] PDF has {num_pages} pages")
+        
+        # Check if PDF is encrypted
+        if reader.is_encrypted:
+            error_msg = (
+                "The PDF file is encrypted/protected. Please unlock it first using the "
+                "/api/pdf/unlock endpoint before adding a watermark."
+            )
+            print(f"[WATERMARK ERROR] {error_msg}")
+            raise ValueError(error_msg)
+        
+        writer = PdfWriter()
+        
+        # Load and prepare watermark image
+        print(f"[WATERMARK] Loading watermark image...")
+        img = Image.open(image_path)
+        
+        # Convert to RGBA if necessary for transparency support
+        if img.mode != 'RGBA':
+            img = img.convert('RGBA')
+        
+        # Get original dimensions
+        orig_width, orig_height = img.size
+        print(f"[WATERMARK] Original image size: {orig_width}x{orig_height}")
+        
+        if orig_width == 0 or orig_height == 0:
+            error_msg = "Image has invalid dimensions"
+            print(f"[WATERMARK ERROR] {error_msg}")
+            raise ValueError(error_msg)
+        
+        # Save image to a temporary file for reportlab to use
         temp_img_path = TEMP_DIR / f"temp_watermark_{uuid.uuid4()}.png"
         img.save(str(temp_img_path), "PNG")
+        print(f"[WATERMARK] Saved temp image to: {temp_img_path}")
         
         # Convert page ranges if provided
         pages_to_watermark = None
@@ -461,6 +642,7 @@ def add_image_watermark(
                             for page_num in range(start - 1, min(end, len(reader.pages))):
                                 pages_to_watermark.add(page_num)
                         except ValueError:
+                            print(f"[WATERMARK] Invalid page range: {range_str}")
                             continue
                 else:
                     try:
@@ -468,7 +650,10 @@ def add_image_watermark(
                         if 0 <= page_num < len(reader.pages):
                             pages_to_watermark.add(page_num)
                     except ValueError:
+                        print(f"[WATERMARK] Invalid page number: {range_str}")
                         continue
+        
+        print(f"[WATERMARK] Watermarking {num_pages} pages")
         
         # Create watermark for each source page
         for page_num, page in enumerate(reader.pages):
@@ -524,18 +709,34 @@ def add_image_watermark(
         
         # Save output
         output_path = TEMP_DIR / f"{uuid.uuid4()}_watermarked.pdf"
+        print(f"[WATERMARK] Saving watermarked PDF to: {output_path}")
+        
         with open(output_path, "wb") as output_file:
             writer.write(output_file)
         
-        return output_path
+        # Verify output was created
+        if output_path.exists() and output_path.stat().st_size > 0:
+            print(f"[WATERMARK] SUCCESS: Watermarked PDF created ({output_path.stat().st_size} bytes)")
+            return output_path
+        else:
+            error_msg = "Watermark output file was not created properly"
+            print(f"[WATERMARK ERROR] {error_msg}")
+            raise ValueError(error_msg)
+            
+    except Exception as e:
+        error_msg = f"Failed to add image watermark: {str(e)}"
+        print(f"[WATERMARK ERROR] {error_msg}")
+        print(f"[WATERMARK ERROR] Traceback: {traceback.format_exc()}")
+        raise ValueError(error_msg)
         
     finally:
         # Clean up temporary image file
         if temp_img_path and temp_img_path.exists():
             try:
                 temp_img_path.unlink()
-            except Exception:
-                pass
+                print(f"[WATERMARK] Cleaned up temp image: {temp_img_path}")
+            except Exception as cleanup_error:
+                print(f"[WATERMARK] Warning: Failed to clean up temp file: {cleanup_error}")
 
 
 def add_multiple_watermarks(

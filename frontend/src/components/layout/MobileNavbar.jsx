@@ -25,6 +25,8 @@ import {
   FileImage,
   Sparkles,
   Zap,
+  QrCode,
+  LayoutGrid,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -83,6 +85,8 @@ const ALL_OPERATIONS = [
   { id: "searchPdf", label: "SEARCH IN PDF", icon: SearchCode, category: "SEARCH OPERATIONS" },
   // WATERMARK
   { id: "watermark", label: "WATERMARK PDF", icon: FileText, category: "WATERMARK OPERATIONS" },
+  // QR CODE
+  { id: "qrcode", label: "QR CODE GENERATOR", icon: QrCode, category: "QR CODE OPERATIONS" },
 ];
 
 export function MobileNavbar({
@@ -91,6 +95,7 @@ export function MobileNavbar({
   mobileRightOpen,
   setMobileRightOpen,
   fetchHistory,
+  setActiveTab,
   lockPdf,
   unlockPdf,
   mergePdf,
@@ -115,6 +120,7 @@ export function MobileNavbar({
   docxToDoc,
   detectLanguage,
   watermarkPdf,
+  qrCode,
   // Individual image conversion handlers
   jpgToPng,
   jpgToWebp,
@@ -133,6 +139,24 @@ export function MobileNavbar({
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState([]);
   const [isSearching, setIsSearching] = useState(false);
+  const [displayedText, setDisplayedText] = useState("");
+  const fullText = "FileLab";
+  
+  // Typewriter effect - types once on load
+  useEffect(() => {
+    let index = 0;
+    setDisplayedText("");
+    const timer = setInterval(() => {
+      if (index <= fullText.length) {
+        setDisplayedText(fullText.slice(0, index));
+        index++;
+      } else {
+        clearInterval(timer);
+      }
+    }, 100);
+    
+    return () => clearInterval(timer);
+  }, []);
 
   // Map operation IDs to their handler functions
   const operationHandlers = useMemo(() => ({
@@ -174,7 +198,8 @@ export function MobileNavbar({
     unZip: unZip,
     searchPdf: searchPdf,
     watermark: watermarkPdf,
-  }), [pdfToDocx, docxToPdf, docToDocx, docxToDoc, pdfToText, textToPdf, textToDocx, pdfToExcel, excelToPdf, pdfToPpt, pptxToPdf, imageToPdf, lockPdf, unlockPdf, mergePdf, splitPdf, convertImage, resizeImage, ocrImage, detectLanguage, zip, unZip, searchPdf, watermarkPdf, jpgToPng, jpgToWebp, jpgToBmp, pngToJpg, pngToWebp, pngToBmp, webpToJpg, webpToPng, webpToBmp, bmpToJpg, bmpToPng, bmpToWebp]);
+    qrcode: qrCode,
+  }), [pdfToDocx, docxToPdf, docToDocx, docxToDoc, pdfToText, textToPdf, textToDocx, pdfToExcel, excelToPdf, pdfToPpt, pptxToPdf, imageToPdf, lockPdf, unlockPdf, mergePdf, splitPdf, convertImage, resizeImage, ocrImage, detectLanguage, zip, unZip, searchPdf, watermarkPdf, qrCode, jpgToPng, jpgToWebp, jpgToBmp, pngToJpg, pngToWebp, pngToBmp, webpToJpg, webpToPng, webpToBmp, bmpToJpg, bmpToPng, bmpToWebp]);
 
   // AI-powered search with fuzzy matching
   useEffect(() => {
@@ -224,12 +249,12 @@ export function MobileNavbar({
       </button>
 
       {/* LOGO */}
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 cursor-pointer" onClick={() => setActiveTab("dashboard")}>
         <div className="p-2 bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg">
           <FileText className="w-5 h-5 text-white" />
         </div>
-        <span className="font-bold text-lg bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
-          FileLab
+        <span className="font-bold text-lg text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-purple-600 select-text">
+          {displayedText}
         </span>
       </div>
 
@@ -500,17 +525,23 @@ export function MobileNavbar({
                   <FolderInput size={16} /> UNZIP FOLDER
                 </MenuButton>
               </MenuSection>
+
+              {/* QR CODE OPERATIONS */}
+              <MenuSection title="QR CODE OPERATIONS">
+                <MenuButton onClick={() => handleMenuAction(qrCode)}>
+                  <QrCode size={16} /> QR CODE GENERATOR
+                </MenuButton>
+              </MenuSection>
             </>
           )}
         </div>
       </div>
 
       {/* =====================================================
-          RIGHT DROPDOWN MENU
+          RIGHT DROPDOWN MENU - Improved UI
       ====================================================== */}
       <div
-        className={`absolute right-0 top-full mt-2 w-48 bg-white border rounded-md shadow-lg
-          flex flex-col gap-2 p-2 z-50
+        className={`absolute right-0 top-full mt-2 w-56 bg-white border-0 rounded-xl shadow-[0_10px_40px_rgba(0,0,0,0.15)] overflow-hidden z-50
           transform transition-all duration-300 ease-out
           ${mobileRightOpen
             ? "opacity-100 translate-y-0 scale-100 pointer-events-auto"
@@ -518,24 +549,64 @@ export function MobileNavbar({
           }
         `}
       >
-        <Button
-          variant="outline"
-          className="w-full flex gap-2"
-          onClick={() => {
-            fetchHistory();
-            setMobileRightOpen(false);
-          }}
-        >
-          <History className="w-4 h-4" /> History
-        </Button>
+        {/* Menu Header */}
+        <div className="px-4 py-3 bg-gradient-to-r from-blue-500/10 to-purple-600/10 border-b border-gray-100">
+          <span className="text-xs font-bold text-gray-700 uppercase tracking-wider">Menu</span>
+        </div>
+        
+        {/* Menu Items */}
+        <div className="p-2 space-y-1">
+          <Button
+            variant="ghost"
+            className="w-full justify-start gap-3 h-11 px-3 rounded-lg
+              hover:bg-gradient-to-r hover:from-blue-500 hover:to-purple-600
+              hover:text-white transition-all duration-200 group"
+            onClick={() => {
+              setActiveTab("dashboard");
+              setMobileRightOpen(false);
+            }}
+          >
+            <div className="p-1.5 rounded-lg bg-gradient-to-br from-blue-500/10 to-purple-600/10 
+              group-hover:from-blue-500 group-hover:to-purple-600 transition-all duration-200">
+              <LayoutGrid className="w-4 h-4 text-blue-500 group-hover:text-white" />
+            </div>
+            <span className="font-medium bg-gradient-to-r from-blue-500 to-purple-600 bg-clip-text text-transparent 
+              group-hover:text-white transition-all duration-200">
+              Dashboard
+            </span>
+          </Button>
 
-        <Button
-          variant="outline"
-          className="w-full"
-          onClick={() => setMobileRightOpen(false)}
-        >
-          Close
-        </Button>
+          <Button
+            variant="ghost"
+            className="w-full justify-start gap-3 h-11 px-3 rounded-lg
+              hover:bg-gradient-to-r hover:from-amber-500 hover:to-orange-600
+              hover:text-white transition-all duration-200 group"
+            onClick={() => {
+              fetchHistory();
+              setMobileRightOpen(false);
+            }}
+          >
+            <div className="p-1.5 rounded-lg bg-gradient-to-br from-amber-500/10 to-orange-500/10 
+              group-hover:from-amber-500 group-hover:to-orange-500 transition-all duration-200">
+              <History className="w-4 h-4 text-amber-500 group-hover:text-white" />
+            </div>
+            <span className="font-medium bg-gradient-to-r from-amber-500 to-orange-600 bg-clip-text text-transparent 
+              group-hover:text-white transition-all duration-200">
+              History
+            </span>
+          </Button>
+        </div>
+
+        {/* Close Button */}
+        <div className="p-3 border-t border-gray-100 bg-gray-50/50">
+          <Button
+            variant="outline"
+            className="w-full h-9 text-sm border-gray-200 hover:bg-gray-100"
+            onClick={() => setMobileRightOpen(false)}
+          >
+            Close Menu
+          </Button>
+        </div>
       </div>
     </div>
   );
@@ -638,23 +709,22 @@ function MobileSearchResultButton({
     if (pct >= 80) return "bg-green-500";
     if (pct >= 60) return "bg-blue-500";
     if (pct >= 40) return "bg-amber-500";
-    return "bg-gray-300";
+    return "bg-gray-400";
   };
   
   // Get percentage badge color based on confidence
   const getPercentageBadgeColor = (pct) => {
-    if (pct >= 80) return "bg-green-100 text-green-700 border-green-200";
-    if (pct >= 60) return "bg-blue-100 text-blue-700 border-blue-200";
-    if (pct >= 40) return "bg-amber-100 text-amber-700 border-amber-200";
-    return "bg-gray-100 text-gray-700 border-gray-200";
+    if (pct >= 80) return "bg-transparent text-green-600 border-green-300";
+    if (pct >= 60) return "bg-transparent text-blue-600 border-blue-300";
+    if (pct >= 40) return "bg-transparent text-amber-600 border-amber-300";
+    return "bg-transparent text-gray-500 border-gray-400";
   };
   
   // Get confidence label
   const getConfidenceLabel = (pct) => {
-    if (pct >= 80) return "High";
-    if (pct >= 60) return "Good";
-    if (pct >= 40) return "Fair";
-    return "Low";
+    if (pct >= 70) return "High";
+    if (pct >= 40) return "Good";
+    return "Fair";
   };
 
   return (

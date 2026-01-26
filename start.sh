@@ -201,11 +201,13 @@ fix_port_conflicts() {
     
     # Check if port 27017 is in use
     local port_in_use=false
+    local port_conflict_occurred=false
     
     # Check using ss
     if command -v ss &> /dev/null; then
         if ss -tuln 2>/dev/null | grep -q ":27017 "; then
             port_in_use=true
+            port_conflict_occurred=true
         fi
     fi
     
@@ -213,6 +215,7 @@ fix_port_conflicts() {
     if [ "$port_in_use" = false ] && command -v netstat &> /dev/null; then
         if netstat -tuln 2>/dev/null | grep -q ":27017 "; then
             port_in_use=true
+            port_conflict_occurred=true
         fi
     fi
     
@@ -220,6 +223,7 @@ fix_port_conflicts() {
     if [ "$port_in_use" = false ] && command -v lsof &> /dev/null; then
         if lsof -i :27017 &>/dev/null; then
             port_in_use=true
+            port_conflict_occurred=true
         fi
     fi
     
@@ -227,42 +231,15 @@ fix_port_conflicts() {
     if [ "$port_in_use" = false ] && command -v fuser &> /dev/null; then
         if fuser 27017/tcp &>/dev/null; then
             port_in_use=true
+            port_conflict_occurred=true
         fi
     fi
     
-    if [ "$port_in_use" = true ]; then
-        print_warning "Port 27017 is already in use! Attempting to free it..."
-        
-        # Try fuser first
-        if command -v fuser &> /dev/null; then
-            print_info "Using fuser to kill process..."
-            sudo fuser -k 27017/tcp 2>/dev/null || true
-        fi
-        
-        # Try lsof
-        if command -v lsof &> /dev/null; then
-            print_info "Using lsof to kill process..."
-            sudo lsof -ti :27017 | xargs -r kill -9 2>/dev/null || true
-        fi
-        
-        # Kill any mongod processes
-        print_info "Killing mongod processes..."
-        sudo pkill -9 mongod 2>/dev/null || true
-        
-        sleep 2
-        
-        # Remove stale Docker containers
-        docker rm -f filelab-mongodb 2>/dev/null || true
-        
-        # Verify port is free
-        sleep 1
-        if ss -tuln 2>/dev/null | grep -q ":27017 "; then
-            print_error "Failed to free port 27017. Please manually stop the conflicting process."
-            print_info "Try: sudo lsof -i :27017"
-            exit 1
-        fi
-        
-        print_status "Port 27017 freed successfully"
+    if [ "$port_conflict_occurred" = true ]; then
+        print_warning "Port 27017 is already in use!"
+        print_info "Please manually stop the conflicting process."
+        print_info "Try: sudo lsof -i :27017"
+        exit 1
     else
         print_status "Port 27017 is free"
     fi
@@ -332,6 +309,48 @@ start_mongodb() {
     fi
     
     print_status "MongoDB started successfully (PID: $MONGO_PID)"
+}
+
+# =============================================================================
+# Step 2b: Restart MongoDB (after killing for port conflict)
+# =============================================================================
+restart_mongodb() {
+    if [ "$USE_EXTERNAL_MONGO" = true ]; then
+        print_info "Using external MongoDB (set MONGO_URL in backend/.env)"
+        print_info "MongoDB configuration loaded from backend/.env"
+        return 0
+    fi
+    
+    print_status "Restarting MongoDB..."
+    
+    # Create data directory if it doesn't exist
+    mkdir -p "$MONGO_DB_PATH"
+    
+    # Start MongoDB in background
+    print_info "Starting MongoDB fresh..."
+    mongod --dbpath "$MONGO_DB_PATH" --bind_ip 127.0.0.1 --port 27017 --fork --logpath "$PROJECT_DIR/logs/mongodb.log"
+    MONGO_PID=$!
+    
+    # Wait for MongoDB to be ready
+    print_info "Waiting for MongoDB to be ready..."
+    local max_attempts=30
+    local attempt=1
+    while [ $attempt -le $max_attempts ]; do
+        if mongosh --eval "db.adminCommand('ping')" --quiet >/dev/null 2>&1; then
+            print_info "MongoDB is ready!"
+            break
+        fi
+        print_info "Waiting for MongoDB... (attempt $attempt/$max_attempts)"
+        sleep 1
+        attempt=$((attempt + 1))
+    done
+
+    if [ $attempt -gt $max_attempts ]; then
+        print_error "MongoDB failed to start within expected time. Check logs/mongodb.log for details."
+        exit 1
+    fi
+    
+    print_status "MongoDB restarted successfully (PID: $MONGO_PID)"
 }
 
 # =============================================================================
@@ -460,10 +479,18 @@ main() {
     mkdir -p "$PROJECT_DIR/logs"
     
     # Fix port conflicts before starting services
-    fix_port_conflicts
+    fix_port_conflicts_result=$(fix_port_conflicts)
+    
+    # Check if MongoDB was killed during port conflict resolution
+    if echo "$fix_port_conflicts_result" | grep -q "MONGO_WAS_KILLED=true"; then
+        # MongoDB was killed, so restart it
+        restart_mongodb
+    else
+        # MongoDB wasn't killed, start normally
+        start_mongodb
+    fi
     
     # Start services
-    start_mongodb
     start_backend
     start_frontend
     

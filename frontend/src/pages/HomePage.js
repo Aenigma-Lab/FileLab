@@ -1,7 +1,53 @@
-import { useState,useEffect, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/components/ui/collapsible";
 
 import axios from "axios";
+
+// Mapping from URL operation names (kebab-case) to internal tab names (camelCase)
+const OPERATION_URL_MAP = {
+  'pdf-to-docx': 'pdfToDocx',
+  'docx-to-pdf': 'docxToPdf',
+  'pdf-to-text': 'pdfToText',
+  'text-to-pdf': 'textToPdf',
+  'text-to-docx': 'textToDocx',
+  'pdf-to-excel': 'pdfToExcel',
+  'excel-to-pdf': 'excelToPdf',
+  'pdf-to-ppt': 'pdfToPpt',
+  'pptx-to-pdf': 'pptxToPdf',
+  'image-to-pdf': 'imageToPdf',
+  'watermark': 'watermark',
+  'qrcode': 'qrcode',
+  'convert-images': 'convertImages',
+  'resize-image': 'resizeImage',
+  'jpg-to-png': 'jpgToPng',
+  'jpg-to-webp': 'jpgToWebp',
+  'jpg-to-bmp': 'jpgToBmp',
+  'png-to-jpg': 'pngToJpg',
+  'png-to-webp': 'pngToWebp',
+  'png-to-bmp': 'pngToBmp',
+  'webp-to-jpg': 'webpToJpg',
+  'webp-to-png': 'webpToPng',
+  'webp-to-bmp': 'webpToBmp',
+  'bmp-to-jpg': 'bmpToJpg',
+  'bmp-to-png': 'bmpToPng',
+  'bmp-to-webp': 'bmpToWebp',
+  'lock': 'lock',
+  'unlock': 'unlock',
+  'merge': 'merge',
+  'split': 'split',
+  'zip': 'zip',
+  'unzip': 'unzip',
+  'ocr': 'ocr',
+  'search': 'search',
+  'dashboard': 'dashboard'
+};
+
+// Reverse mapping from internal tab names to URL operation names
+const TAB_TO_URL_MAP = Object.entries(OPERATION_URL_MAP).reduce((acc, [url, tab]) => {
+  acc[tab] = url;
+  return acc;
+}, {});
 import { toast } from "sonner";
 import {
   Upload,
@@ -76,6 +122,8 @@ import { cn } from "@/lib/utils";
 import { DesktopNavbar } from "@/components/layout/DesktopNavbar";
 import { MobileNavbar } from "@/components/layout/MobileNavbar";
 import WatermarkPDF from "@/components/WatermarkPDF";
+import QRCodeGenerator from "@/components/QRCodeGenerator";
+import Dashboard from "@/components/Dashboard";
 import { set } from "date-fns";
 // import styles from "./HeaderMenu.module.css";
 
@@ -166,10 +214,35 @@ const [loading, setLoading] = useState(false);
   const [openDocumentDropdown, setOpenDocumentDropdown] = useState(false);
   const [openImageDropdown, setOpenImageDropdown] = useState(false);
 
-  const [activeTab, setActiveTab] = useState("pdfToDocx"); // Default to first operation
+  // Initialize search params for URL-based operation routing
+  const [searchParams, setSearchParams] = useSearchParams();
+  
+// Get operation from URL query param, default to "dashboard"
+  const getInitialTab = () => {
+    const opParam = searchParams.get('op');
+    if (opParam && OPERATION_URL_MAP[opParam]) {
+      return OPERATION_URL_MAP[opParam];
+    }
+    return "dashboard";
+  };
+  
+  const [activeTab, setActiveTab] = useState(getInitialTab); // Default to first operation
+  
+  // Sync activeTab changes to URL
+  useEffect(() => {
+    const urlOp = searchParams.get('op');
+    const currentOp = TAB_TO_URL_MAP[activeTab];
+    
+    // Update URL if it doesn't match the current tab
+    if (currentOp && currentOp !== urlOp) {
+      setSearchParams({ op: currentOp }, { replace: true });
+    }
+  }, [activeTab, searchParams, setSearchParams]);
 
-  // Operation names mapping - ALL OPERATIONS
+// Operation names mapping - ALL OPERATIONS
   const operationNames = {
+    // Dashboard
+    dashboard: "Dashboard",
     // Document Operations
     pdfToDocx: "PDF to DOCX",
     docxToPdf: "DOCX to PDF",
@@ -214,6 +287,8 @@ const [loading, setLoading] = useState(false);
     search: "Search in PDF",
     ocr: "OCR Image",
     detectLanguage: "Detect Language",
+    // QR Code Operations
+    qrcode: "QR Code Generator",
   };
 
   // Helper function to get icon for image format
@@ -462,8 +537,16 @@ const [loading, setLoading] = useState(false);
     setActiveTab("imageToPdf");
   };
 
-  const openWatermarkPdf = () => {
+const openWatermarkPdf = () => {
     setActiveTab("watermark");
+  };
+
+  const openQrCode = () => {
+    setActiveTab("qrcode");
+  };
+
+  const openDashboard = () => {
+    setActiveTab("dashboard");
   };
 
   const openDetectLanguage = () => {
@@ -2946,7 +3029,7 @@ xhr.addEventListener("load", () => {
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50">
       {/* Header */}
-{/*---------------------------------START OF NAVBAR------------------------------------------------------------------- */}
+   {/* /* ---------------------------------START OF NAVBAR------------------------------------------------------------------- */} 
    <header className="sticky top-0 z-50 border-b bg-white/70 md:backdrop-blur-md">
       <div className="container mx-auto px-4 py-4 relative">
 
@@ -2956,6 +3039,7 @@ xhr.addEventListener("load", () => {
           mobileRightOpen={mobileRightOpen}
           setMobileRightOpen={setMobileRightOpen}
           fetchHistory={fetchHistory}
+          setActiveTab={setActiveTab}
           pdfToDocx={convertDocument}
           docxToPdf={openDocxToPdf}
           pdfToText={openPdfToText}
@@ -2978,6 +3062,7 @@ xhr.addEventListener("load", () => {
           pptxToPdf={openPptxToPdf}
           detectLanguage={openDetectLanguage}
           watermarkPdf={openWatermarkPdf}
+          qrCode={openQrCode}
           jpgToPng={openJpgToPng}
           jpgToWebp={openJpgToWebp}
           jpgToBmp={openJpgToBmp}
@@ -3007,7 +3092,10 @@ xhr.addEventListener("load", () => {
           pptxToPdf={openPptxToPdf}
           imageToPdf={openImageToPdf}
           watermarkPdf={openWatermarkPdf}
+          qrCode={openQrCode}
           fetchHistory={fetchHistory}
+          openDashboard={openDashboard}
+          activeTab={activeTab}
           lockPdf={openLockPDF}
           unlockPdf={openUnlockPDF}
           mergePdf={openMergePdf}
@@ -3061,6 +3149,11 @@ xhr.addEventListener("load", () => {
 
               {/* TabsList - Hidden, but keeps the Tabs component functional */}
               <TabsList className="hidden"></TabsList>
+
+              {/* Dashboard - Main landing page with category navigation */}
+              <TabsContent value="dashboard" className="mt-6">
+                <Dashboard onSelectOperation={setActiveTab} />
+              </TabsContent>
 
               {/* TabsContent sections */}
               {/* Document Conversion - PDF to DOCX */}
@@ -3728,8 +3821,13 @@ xhr.addEventListener("load", () => {
               </TabsContent>
 
               {/* Watermark PDF */}
-              <TabsContent value="watermark" className="mt-6 space-y-6">
+<TabsContent value="watermark" className="mt-6 space-y-6">
                 <WatermarkPDF />
+              </TabsContent>
+
+              {/* QR Code Generator */}
+              <TabsContent value="qrcode" className="mt-6 space-y-6">
+                <QRCodeGenerator />
               </TabsContent>
 
               {/* Convert Images */}
